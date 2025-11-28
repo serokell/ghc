@@ -501,6 +501,9 @@ callArityAnal arity int (Lam v e)
   where
     (ae, e') = callArityAnal (arity - 1) (int `delVarSet` v) e
 
+callArityAnal _ _ (FieldOp op)
+  = (emptyArityRes, FieldOp op)
+
 -- Application. Increase arity for the called expression, nothing to know about
 -- the second
 callArityAnal arity int (App e (Type t))

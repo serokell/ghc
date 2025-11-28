@@ -1184,6 +1184,8 @@ simplExprF1 env (Lit lit)      cont = {-#SCC "rebuild" #-} rebuild env (Lit lit)
 simplExprF1 env (Tick t expr)  cont = {-#SCC "simplTick" #-} simplTick env t expr cont
 simplExprF1 env (Cast body co) cont = {-#SCC "simplCast" #-} simplCast env body co cont
 simplExprF1 env (Coercion co)  cont = {-#SCC "simplCoercionF" #-} simplCoercionF env co cont
+simplExprF1 env (FieldOp op)
+                               cont = {-#SCC "rebuild" #-} rebuild env (FieldOp op) cont
 
 simplExprF1 env (App fun arg) cont
   = {-#SCC "simplExprF1-App" #-} case arg of

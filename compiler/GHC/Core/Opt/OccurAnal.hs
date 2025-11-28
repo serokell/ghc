@@ -1964,6 +1964,7 @@ cheapExprSize e
 
     go1 n (Var {})        = n+1
     go1 n (Lit {})        = n+1
+    go1 n (FieldOp{})     = n+1
     go1 n (Type {})       = n
     go1 n (Coercion {})   = n
     go1 n (Tick _ e)      = go1 n e
@@ -2550,6 +2551,12 @@ occAnal env (Cast expr co)
 
 occAnal env app@(App _ _)
   = occAnalApp env (collectArgsTicks tickishFloatable app)
+
+occAnal _ expr@(FieldOp op)
+  = WUD (fld_op_occs op) expr where
+    fld_op_occs (MkFieldOperation _ s t _) =
+      addManyOccs emptyDetails (coVarsOfType s) `andUDs`
+      addManyOccs emptyDetails (coVarsOfType t)
 
 occAnal env expr@(Lam {})
   = adjustNonRecRhs NotJoinPoint $ -- NotJoinPoint <=> markAllManyNonTail

@@ -8,7 +8,7 @@
 -- | GHC.Core holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module GHC.Core (
         -- * Main data types
-        Expr(..), Alt(..), Bind(..), AltCon(..), Arg,
+        Expr(..), FieldOperation(..), FieldOpSort(..), Alt(..), Bind(..), AltCon(..), Arg,
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
 
@@ -119,6 +119,8 @@ import Data.Int
 import Data.List.NonEmpty (nonEmpty)
 import qualified Data.List.NonEmpty as NE
 import Data.Word
+
+import Language.Haskell.Syntax.Basic
 
 import Control.DeepSeq
 
@@ -259,10 +261,38 @@ data Expr b
   | Case  (Expr b) b Type [Alt b]   -- See Note [Case expression invariants]
                                     -- and Note [Why does Case have a 'Type' field?]
   | Cast  (Expr b) CoercionR        -- The Coercion has Representational role
+  | FieldOp FieldOperation
   | Tick  CoreTickish (Expr b)
   | Type  Type
   | Coercion Coercion
   deriving Data
+
+instance Show b => Show (Expr b) where
+  show (Var v) = "Var (" ++ show v ++ ")"
+  show (Lit l) = "Lit (" ++ show l ++ ")"
+  show (App a b) = "App (" ++ show a ++ " " ++ show b ++ ")"
+  show (Lam b e) = "Lam (\\" ++ show b ++ " -> " ++ show e ++ ")"
+  show (Let bind e) = "Let (" ++ show bind ++ " in " ++ show e ++ ")"
+  show (Case e b _ alts) = "Case (" ++ show e ++ " of " ++ show b ++ " " ++ show alts ++ ")"
+  show (Cast e _) = "Cast (" ++ show e ++ ")"
+  show (FieldOp {}) = "FieldOp"
+  show (Tick _ e) = "Tick (" ++ show e ++ ")"
+  show (Type{}) = "Type"
+  show (Coercion{}) = "Coercion"
+
+data FieldOperation = MkFieldOperation FieldOpSort Type Type FieldLabelString
+  deriving (Data)
+
+
+data FieldOpSort = SetField | SelectField
+  deriving (Data, Eq, Ord)
+
+instance Outputable FieldOpSort where
+  ppr SetField = text "set_fld"
+  ppr SelectField = text "sel_fld"
+
+instance Outputable FieldOperation where
+  ppr (MkFieldOperation sort s t f) = ppr sort <> text ":{" <+> ftext (field_label f) <+> ppr s <+> ppr t <+> text "}"
 
 -- | Type synonym for expressions that occur in function argument positions.
 -- Only 'Arg' should contain a 'Type' at top level, general 'Expr' should not
@@ -277,6 +307,9 @@ type Arg b = Expr b
 data Alt b
     = Alt AltCon [b] (Expr b)
     deriving (Data)
+
+instance Show b => Show (Alt b) where
+  show (Alt _ bs e) = "Alt (" ++ show bs ++ show e ++ ")"
 
 -- | A case alternative constructor (i.e. pattern match)
 
@@ -314,7 +347,7 @@ instance Ord AltCon where
 -- See Note [GHC Formalism] in GHC.Core.Lint
 data Bind b = NonRec b (Expr b)
             | Rec [(b, (Expr b))]
-  deriving Data
+  deriving (Data, Show)
 
 -- | Helper function. You can use the result of 'mkBinds' with 'mkLets' for
 -- instance.
@@ -1939,6 +1972,7 @@ deTagExpr (App e1 e2)               = App (deTagExpr e1) (deTagExpr e2)
 deTagExpr (Lam (TB b _) e)          = Lam b (deTagExpr e)
 deTagExpr (Let bind body)           = Let (deTagBind bind) (deTagExpr body)
 deTagExpr (Case e (TB b _) ty alts) = Case (deTagExpr e) b ty (map deTagAlt alts)
+deTagExpr (FieldOp op)    = FieldOp op
 deTagExpr (Tick t e)                = Tick t (deTagExpr e)
 deTagExpr (Cast e co)               = Cast (deTagExpr e) co
 
@@ -2367,6 +2401,7 @@ data AnnExpr' bndr annot
   | AnnTick     CoreTickish (AnnExpr bndr annot)
   | AnnType     Type
   | AnnCoercion Coercion
+  | AnnFieldOp  FieldOperation
 
 -- | A clone of the 'Alt' type but allowing annotation at every tree node
 data AnnAlt bndr annot = AnnAlt AltCon [bndr] (AnnExpr bndr annot)
@@ -2407,6 +2442,7 @@ deAnnotate' (AnnLam  binder body) = Lam binder (deAnnotate body)
 deAnnotate' (AnnApp  fun arg)     = App (deAnnotate fun) (deAnnotate arg)
 deAnnotate' (AnnCast e (_,co))    = Cast (deAnnotate e) co
 deAnnotate' (AnnTick tick body)   = Tick tick (deAnnotate body)
+deAnnotate' (AnnFieldOp op)       = FieldOp op
 
 deAnnotate' (AnnLet bind body)
   = Let (deAnnBind bind) (deAnnotate body)

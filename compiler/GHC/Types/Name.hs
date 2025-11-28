@@ -145,6 +145,9 @@ data Name = Name
     -- the SrcLoc in a Name all that often.
   }
 
+instance Show Name where
+  show = show . n_occ
+
 -- See Note [About the NameSorts]
 data NameSort
   = External Module

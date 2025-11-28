@@ -41,6 +41,7 @@ import qualified Data.Map    as Map
 import GHC.Types.Name.Env
 import Control.Monad( (>=>) )
 import GHC.Types.Literal (Literal)
+import GHC.Core.DataCon (FieldLabelString)
 
 {-
 This module implements TrieMaps over Core related data structures
@@ -132,11 +133,14 @@ type CoreMapG = GenMap CoreMapX
 
 type LiteralMap  a = Map.Map Literal a
 
+type FieldOpMap a = Map.Map FieldOpSort (TypeMapG (TypeMapG (Map.Map FieldLabelString a)))
+
 -- | @CoreMapX a@ is the base map from @DeBruijn CoreExpr@ to @a@, but without
 -- the 'GenMap' optimization.
 data CoreMapX a
   = CM { cm_var   :: VarMap a
        , cm_lit   :: LiteralMap a
+       , cm_fld   :: FieldOpMap a
        , cm_co    :: CoercionMapG a
        , cm_type  :: TypeMapG a
        , cm_cast  :: CoreMapG (CoercionMapG a)
@@ -250,19 +254,20 @@ emptyE = CM { cm_var = emptyTM, cm_lit = emptyTM
             , cm_cast = emptyTM, cm_app = emptyTM
             , cm_lam = emptyTM, cm_letn = emptyTM
             , cm_letr = emptyTM, cm_case = emptyTM
-            , cm_ecase = emptyTM, cm_tick = emptyTM }
+            , cm_ecase = emptyTM, cm_tick = emptyTM
+            , cm_fld = emptyTM }
 
 -- TODO(22292): derive
 instance Functor CoreMapX where
     fmap f CM
       { cm_var = cvar, cm_lit = clit, cm_co = cco, cm_type = ctype, cm_cast = ccast
       , cm_app = capp, cm_lam = clam, cm_letn = cletn, cm_letr = cletr, cm_case = ccase
-      , cm_ecase = cecase, cm_tick = ctick } = CM
+      , cm_ecase = cecase, cm_tick = ctick, cm_fld = fld } = CM
       { cm_var = fmap f cvar, cm_lit = fmap f clit, cm_co = fmap f cco, cm_type = fmap f ctype
       , cm_cast = fmap (fmap f) ccast, cm_app = fmap (fmap f) capp, cm_lam = fmap (fmap f) clam
       , cm_letn = fmap (fmap (fmap f)) cletn, cm_letr = fmap (fmap (fmap f)) cletr
       , cm_case = fmap (fmap f) ccase, cm_ecase = fmap (fmap f) cecase
-      , cm_tick = fmap (fmap f) ctick }
+      , cm_tick = fmap (fmap f) ctick, cm_fld = fmap (fmap (fmap (fmap f))) fld }
 
 instance TrieMap CoreMapX where
    type Key CoreMapX = DeBruijn CoreExpr
@@ -277,12 +282,14 @@ instance TrieMap CoreMapX where
 ftE :: (a->Bool) -> CoreMapX a -> CoreMapX a
 ftE f (CM { cm_var = cvar, cm_lit = clit
           , cm_co = cco, cm_type = ctype
+          , cm_fld = fld
           , cm_cast = ccast , cm_app = capp
           , cm_lam = clam, cm_letn = cletn
           , cm_letr = cletr, cm_case = ccase
           , cm_ecase = cecase, cm_tick = ctick })
   = CM { cm_var = filterTM f cvar, cm_lit = filterTM f clit
        , cm_co = filterTM f cco, cm_type = filterTM f ctype
+       , cm_fld = (fmap . fmap . fmap) (filterTM f) fld
        , cm_cast = fmap (filterTM f) ccast, cm_app = fmap (filterTM f) capp
        , cm_lam = fmap (filterTM f) clam, cm_letn = fmap (fmap (filterTM f)) cletn
        , cm_letr = fmap (fmap (filterTM f)) cletr, cm_case = fmap (filterTM f) ccase
@@ -291,12 +298,14 @@ ftE f (CM { cm_var = cvar, cm_lit = clit
 mpE :: (a -> Maybe b) -> CoreMapX a -> CoreMapX b
 mpE f (CM { cm_var = cvar, cm_lit = clit
           , cm_co = cco, cm_type = ctype
+          , cm_fld = fld
           , cm_cast = ccast , cm_app = capp
           , cm_lam = clam, cm_letn = cletn
           , cm_letr = cletr, cm_case = ccase
           , cm_ecase = cecase, cm_tick = ctick })
   = CM { cm_var = mapMaybeTM f cvar, cm_lit = mapMaybeTM f clit
        , cm_co = mapMaybeTM f cco, cm_type = mapMaybeTM f ctype
+       , cm_fld = (fmap . fmap . fmap) (mapMaybeTM f) fld
        , cm_cast = fmap (mapMaybeTM f) ccast, cm_app = fmap (mapMaybeTM f) capp
        , cm_lam = fmap (mapMaybeTM f) clam, cm_letn = fmap (fmap (mapMaybeTM f)) cletn
        , cm_letr = fmap (fmap (mapMaybeTM f)) cletr, cm_case = fmap (mapMaybeTM f) ccase
@@ -359,6 +368,9 @@ lkE (D env expr) cm = go expr cm
                | null as    = cm_ecase >.> lkG (D env e) >=> lkG (D env ty)
                | otherwise  = cm_case >.> lkG (D env e)
                               >=> lkList (lkA (extendCME env b)) as
+    go (FieldOp op) = cm_fld >.> lkFldOp op where
+      lkFldOp (MkFieldOperation sort s t f) = lookupTM sort >=> lkG (D env s) >=> lkG (D env t) >=> lookupTM f
+
 
 xtE :: DeBruijn CoreExpr -> XT a -> CoreMapX a -> CoreMapX a
 xtE (D env (Var v))              f m = m { cm_var  = cm_var m
@@ -389,6 +401,12 @@ xtE (D env (Let (Rec prs) e))    f m = m { cm_letr =
                                                  |>> xtG (D env1 e)
                                                  |>> xtList (xtBndr env1)
                                                             bndrs f }
+xtE (D env (FieldOp op)) f m       = xtFld env op f m where
+  xtFld env (MkFieldOperation sort s t fld) f m = m { cm_fld = cm_fld m
+                                                 |> alterTM sort
+                                                 |>> xtG (D env s)
+                                                 |>> xtG (D env t)
+                                                 |>> alterTM fld f }
 xtE (D env (Case e b ty as))     f m
                      | null as   = m { cm_ecase = cm_ecase m |> xtG (D env e)
                                                  |>> xtG (D env ty) f }

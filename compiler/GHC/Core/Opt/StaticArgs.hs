@@ -193,6 +193,9 @@ satExpr var@(Var v) interesting_ids = do
 satExpr lit@(Lit _) _ =
     return (lit, emptyIdSATInfo, Nothing)
 
+satExpr fld@(FieldOp _) _ =
+    return (fld, emptyIdSATInfo, Nothing)
+
 satExpr (Lam binders body) interesting_ids = do
     (body', sat_info, this_app) <- satExpr body interesting_ids
     return (Lam binders body', finalizeApp this_app sat_info, Nothing)

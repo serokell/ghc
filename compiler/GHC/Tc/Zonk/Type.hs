@@ -1118,7 +1118,7 @@ zonkExpr (HsGetField x _ _) = dataConCantHappen x
 zonkExpr (HsProjection x _) = dataConCantHappen x
 zonkExpr e@(XExpr (HsTick {})) = pprPanic "zonkExpr" (ppr e)
 zonkExpr e@(XExpr (HsBinTick {})) = pprPanic "zonkExpr" (ppr e)
-
+zonkExpr e@(XExpr (HsTcRecOp{})) = return e
 -------------------------------------------------------------------------
 {-
 Note [Skolems in zonkSyntaxExpr]
@@ -1856,6 +1856,14 @@ zonkCoreExpr (Case scrut b ty alts)
          ; runZonkBndrT (zonkIdBndrX b) $ \ b' ->
       do { alts' <- mapM zonkCoreAlt alts
          ; return $ Case scrut' b' ty' alts' } }
+zonkCoreExpr (FieldOp op)
+    = do { op' <- zonkFldOp op
+         ; return $ FieldOp op' }
+    where
+      zonkFldOp (MkFieldOperation sort s t f)
+        = do { s' <- zonkTcTypeToTypeX s
+             ; t' <- zonkTcTypeToTypeX t
+             ; return $ MkFieldOperation sort s' t' f }
 
 zonkCoreAlt :: CoreAlt -> ZonkTcM CoreAlt
 zonkCoreAlt (Alt dc bndrs rhs)
@@ -2006,4 +2014,3 @@ Quantifying here is awkward because (a) the data type is big and (b)
 finding the free type vars of an expression is necessarily monadic
 operation. (consider /\a -> f @ b, where b is side-effected to a)
 -}
-

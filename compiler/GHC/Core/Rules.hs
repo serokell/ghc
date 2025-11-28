@@ -1954,6 +1954,7 @@ ruleCheck _   (Var _)         = emptyBag
 ruleCheck _   (Lit _)         = emptyBag
 ruleCheck _   (Type _)        = emptyBag
 ruleCheck _   (Coercion _)    = emptyBag
+ruleCheck _   (FieldOp _)     = emptyBag
 ruleCheck env (App f a)       = ruleCheckApp env (App f a) []
 ruleCheck env (Tick _ e)      = ruleCheck env e
 ruleCheck env (Cast e _)      = ruleCheck env e

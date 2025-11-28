@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
+{-# LANGUAGE DerivingVia #-}
 module Language.Haskell.Syntax.Basic where
 
 import Data.Data (Data)
@@ -8,7 +9,7 @@ import Data.Ord
 import Data.Bool
 import Prelude
 
-import GHC.Data.FastString (FastString)
+import GHC.Data.FastString (FastString, LexicalFastString(..))
 import Control.DeepSeq
 
 {-
@@ -57,6 +58,9 @@ Field Labels
 -- they are not necessarily unique (even within a module)
 newtype FieldLabelString = FieldLabelString { field_label:: FastString }
   deriving (Data, Eq, NFData)
+
+-- TODO sand-witch: came up with a better solution
+deriving via LexicalFastString instance Ord FieldLabelString
 
 {-
 ************************************************************************

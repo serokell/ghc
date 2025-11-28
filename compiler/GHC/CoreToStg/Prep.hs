@@ -765,6 +765,9 @@ cpeRhsE env (Type ty)
   = return (emptyFloats, Type (cpSubstTy env ty))
 cpeRhsE env (Coercion co)
   = return (emptyFloats, Coercion (cpSubstCo env co))
+cpeRhsE env (FieldOp op)
+  = return (emptyFloats, FieldOp $! cpeFld op)
+  where cpeFld (MkFieldOperation sort s t f) = MkFieldOperation sort (cpSubstTy env s) (cpSubstTy env t) f
 cpeRhsE env expr@(Lit lit)
   | LitNumber LitNumBigNat i <- lit
     = cpeBigNatLit env i

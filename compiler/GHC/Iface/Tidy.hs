@@ -503,6 +503,7 @@ collectCostCentres mod_name binds rules
     go cs e = case e of
       Var{} -> cs
       Lit{} -> cs
+      FieldOp{} -> cs
       App e1 e2 -> go (go cs e1) e2
       Lam _ e -> go cs e
       Let b e -> go (go_bind cs b) e

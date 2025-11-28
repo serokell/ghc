@@ -231,6 +231,7 @@ libCase env (Var v)             = libCaseApp env v []
 libCase _   (Lit lit)           = Lit lit
 libCase _   (Type ty)           = Type ty
 libCase _   (Coercion co)       = Coercion co
+libCase _   (FieldOp op)        = FieldOp op
 libCase env e@(App {})          | let (fun, args) = collectArgs e
                                 , Var v <- fun
                                 = libCaseApp env v args

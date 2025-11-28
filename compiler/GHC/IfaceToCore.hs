@@ -146,6 +146,8 @@ import Language.Haskell.Syntax.BooleanFormula (BooleanFormula)
 import Language.Haskell.Syntax.BooleanFormula qualified as BF(BooleanFormula(..))
 import Language.Haskell.Syntax.Extension (NoExtField (NoExtField))
 
+import Language.Haskell.Syntax.Basic
+
 {-
 This module takes
 
@@ -1633,6 +1635,11 @@ tcIfaceExpr (IfaceExt gbl)
 tcIfaceExpr (IfaceLitRubbish tc rep)
   = do rep' <- tcIfaceType rep
        return (Lit (LitRubbish tc rep'))
+
+tcIfaceExpr (IfaceFieldOp op)
+  = FieldOp <$> tcIfaceFldOp op where
+    tcIfaceFldOp (IfaceMkFieldOperation sort s t f) =
+      MkFieldOperation sort <$> tcIfaceType s <*> tcIfaceType t <*> pure (FieldLabelString f)
 
 tcIfaceExpr (IfaceLit lit)
   = do lit' <- tcIfaceLit lit

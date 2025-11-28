@@ -12,7 +12,7 @@ module GHC.Iface.Syntax (
 
         IfaceDecl(..), IfaceFamTyConFlav(..), IfaceClassOp(..), IfaceAT(..),
         IfaceConDecl(..), IfaceConDecls(..), IfaceEqSpec,
-        IfaceExpr(..), IfaceAlt(..), IfaceLetBndr(..), IfaceBinding,
+        IfaceExpr(..), IfaceFieldOperation(..), IfaceAlt(..), IfaceLetBndr(..), IfaceBinding,
         IfaceBindingX(..), IfaceMaybeRhs(..), IfaceConAlt(..),
         IfaceIdInfo, IfaceIdDetails(..), IfaceUnfolding(..), IfGuidance(..),
         IfaceInfoItem(..), IfaceRule(..), IfaceAnnotation(..), IfaceAnnTarget,
@@ -59,7 +59,7 @@ import GHC.Builtin.Names ( unrestrictedFunTyConKey, liftedTypeKindTyConKey,
 import GHC.Types.Unique ( hasKey )
 import GHC.Iface.Type
 import GHC.Iface.Recomp.Binary
-import GHC.Core( IsOrphan, isOrphan, UnfoldingCache(..) )
+import GHC.Core( IsOrphan, isOrphan, UnfoldingCache(..), FieldOpSort (..) )
 import GHC.Types.Demand
 import GHC.Types.Cpr
 import GHC.Core.Class
@@ -103,6 +103,7 @@ import Control.Monad
 import Control.DeepSeq
 import Data.Proxy
 import qualified Data.Set as Set
+import Data.Binary (Word8)
 
 infixl 3 &&&
 
@@ -695,7 +696,9 @@ data IfaceExpr
        -- See GHC.Types.Literal Note [Rubbish literals] item (6)
   | IfaceFCall  ForeignCall IfaceType
   | IfaceTick   IfaceTickish IfaceExpr    -- from Tick tickish E
+  | IfaceFieldOp    IfaceFieldOperation
 
+data IfaceFieldOperation = IfaceMkFieldOperation FieldOpSort IfaceType IfaceType FastString
 
 data IfaceTickish
   = IfaceHpcTick    Module Int               -- from HpcTick x
@@ -1830,6 +1833,10 @@ pprIfaceExpr add_par (IfaceLet (IfaceRec pairs) body)
 pprIfaceExpr add_par (IfaceTick tickish e)
   = add_par (pprIfaceTickish tickish <+> pprIfaceExpr noParens e)
 
+pprIfaceExpr add_par (IfaceFieldOp op)
+  = add_par (text "fld:" <> ppr_fld_op op) where
+    ppr_fld_op (IfaceMkFieldOperation sort s t f) = ppr sort <+> ppr f <+> ppr s <+> ppr t
+
 pprIfaceAlt :: IfaceAlt -> SDoc
 pprIfaceAlt (IfaceAlt con bs rhs)
   = sep [ppr_con_bs con bs, arrow <+> pprIfaceExpr noParens rhs]
@@ -2860,6 +2867,15 @@ instance Binary IfaceExpr where
         putByte bh 14
         put_ bh r
         put_ bh torc
+    put_ bh (IfaceFieldOp op) = do
+        putByte bh 15
+        case op of
+          IfaceMkFieldOperation sort s t f -> do
+            putByte bh $ case sort of SelectField -> 0 :: Word8; SetField -> 1
+            put_ bh s
+            put_ bh t
+            put_ bh f
+
     get bh = do
         h <- getByte bh
         case h of
@@ -2905,6 +2921,12 @@ instance Binary IfaceExpr where
             14 -> do r <- get bh
                      torc <- get bh
                      return (IfaceLitRubbish torc r)
+            15 -> do sortInt <- get @Word8 bh
+                     let sort = if sortInt == 0 then SelectField else SetField
+                     s <- get bh
+                     t <- get bh
+                     f <- get bh
+                     return (IfaceFieldOp (IfaceMkFieldOperation sort s t f))
             _ -> panic ("get IfaceExpr " ++ show h)
 
 instance Binary IfaceTickish where
@@ -3178,6 +3200,11 @@ instance NFData IfaceExpr where
     IfaceLitRubbish tc r -> rnf tc `seq` rnf r `seq` ()
     IfaceFCall fc ty -> rnf fc `seq` rnf ty
     IfaceTick tick e -> rnf tick `seq` rnf e
+    IfaceFieldOp op -> rnf op
+
+instance NFData IfaceFieldOperation where
+  rnf = \case
+    IfaceMkFieldOperation !_ s t f -> rnf s `seq` rnf t `seq` rnf f
 
 instance NFData IfaceAlt where
   rnf (IfaceAlt con bndrs rhs) = rnf con `seq` rnf bndrs `seq` rnf rhs

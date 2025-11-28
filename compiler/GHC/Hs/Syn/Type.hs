@@ -155,6 +155,7 @@ hsExprType (XExpr (ConLikeTc con _ _)) = conLikeType con
 hsExprType (XExpr (HsTick _ e)) = lhsExprType e
 hsExprType (XExpr (HsBinTick _ _ e)) = lhsExprType e
 hsExprType (XExpr (HsRecSelTc (FieldOcc _ id))) = idType (unLoc id)
+hsExprType (XExpr (HsTcRecOp ty _)) = ty
 
 arithSeqInfoType :: ArithSeqInfo GhcTc -> Type
 arithSeqInfoType asi = mkListTy $ case asi of

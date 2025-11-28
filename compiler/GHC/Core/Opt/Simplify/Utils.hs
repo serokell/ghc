@@ -1009,6 +1009,7 @@ interestingArg env e = go env 0 e
        | otherwise             = ValueArg
     go _   _ (Type _)          = TrivArg
     go _   _ (Coercion _)      = TrivArg
+    go _   _ (FieldOp{})       = ValueArg
     go env n (App fn (Type _)) = go env n fn
     go env n (App fn _)        = go env (n+1) fn
     go env n (Tick _ a)        = go env n a

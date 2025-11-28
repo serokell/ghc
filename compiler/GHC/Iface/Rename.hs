@@ -612,6 +612,8 @@ rnIfaceExpr :: Rename IfaceExpr
 rnIfaceExpr (IfaceLcl name) = pure (IfaceLcl name)
 rnIfaceExpr (IfaceExt gbl) = IfaceExt <$> rnIfaceGlobal gbl
 rnIfaceExpr (IfaceType ty) = IfaceType <$> rnIfaceType ty
+rnIfaceExpr (IfaceFieldOp op) = IfaceFieldOp <$> rnIfaceFldOp op where
+  rnIfaceFldOp (IfaceMkFieldOperation sort s t f) = IfaceMkFieldOperation sort <$> rnIfaceType s <*> rnIfaceType t <*> pure f
 rnIfaceExpr (IfaceCo co) = IfaceCo <$> rnIfaceCo co
 rnIfaceExpr (IfaceTuple sort args) = IfaceTuple sort <$> rnIfaceExprs args
 rnIfaceExpr (IfaceLam lam_bndr expr)

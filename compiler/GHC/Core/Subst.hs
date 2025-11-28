@@ -256,6 +256,8 @@ substExpr subst expr
   where
     go (Var v)         = lookupIdSubst subst v
     go (Type ty)       = Type (substTyUnchecked subst ty)
+    go (FieldOp op)    = FieldOp (substFieldOp op) where
+      substFieldOp (MkFieldOperation sort s t f) = MkFieldOperation sort (substTyUnchecked subst s) (substTyUnchecked subst t) f
     go (Coercion co)   = Coercion (substCo subst co)
     go (Lit lit)       = Lit lit
     go (App fun arg)   = App (go fun) (go arg)

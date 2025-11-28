@@ -152,7 +152,7 @@ data Literal
                                 --
                                 -- 2) Flag indicating whether the symbol
                                 --    references a function or a data
-  deriving Data
+  deriving (Data, Show)
 
 -- | Numeric literal type
 data LitNumType
@@ -167,7 +167,7 @@ data LitNumType
   | LitNumWord16  -- ^ @Word16#@ - exactly 16 bits
   | LitNumWord32  -- ^ @Word32#@ - exactly 32 bits
   | LitNumWord64  -- ^ @Word64#@ - exactly 64 bits
-  deriving (Data,Enum,Eq,Ord)
+  deriving (Data,Enum,Eq,Ord, Show)
 
 -- | Indicate if a numeric literal type supports negative numbers
 litNumIsSigned :: LitNumType -> Bool

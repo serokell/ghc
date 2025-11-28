@@ -74,6 +74,7 @@ letBndrStats top_lvl v
 exprStats :: CoreExpr -> CoreStats
 exprStats (Var {})        = oneTM
 exprStats (Lit {})        = oneTM
+exprStats (FieldOp{})     = oneTM
 exprStats (Type t)        = tyStats t
 exprStats (Coercion c)    = coStats c
 exprStats (App f a)       = exprStats f `plusCS` exprStats a
@@ -108,6 +109,7 @@ exprSize :: CoreExpr -> Int
 -- Counts *leaves*, not internal nodes. Types and coercions are not counted.
 exprSize (Var _)         = 1
 exprSize (Lit _)         = 1
+exprSize (FieldOp _)     = 1
 exprSize (App f a)       = exprSize f + exprSize a
 exprSize (Lam b e)       = bndrSize b + exprSize e
 exprSize (Let b e)       = bindSize b + exprSize e

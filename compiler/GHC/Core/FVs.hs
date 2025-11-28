@@ -276,6 +276,10 @@ exprFVs (Let (Rec pairs) body) fv_cand in_scope acc
                (mapUnionFV rhs_fvs pairs `unionFV` exprFVs body)
                fv_cand in_scope acc
 
+exprFVs (FieldOp op) fv_cand in_scope acc = fldOpFVs op fv_cand in_scope acc where
+  fldOpFVs (MkFieldOperation _ s t _) =
+    tyCoFVsOfType s `unionFV` tyCoFVsOfType t
+
 ---------
 rhs_fvs :: (Id, CoreExpr) -> FV
 rhs_fvs (bndr, rhs) = exprFVs rhs `unionFV`
@@ -393,6 +397,7 @@ orphNamesOfExpr e
       where n = idName v
     go (Lit _)              = emptyNameSet
     go (Type ty)            = orphNamesOfType ty        -- Don't need free tyvars
+    go (FieldOp op)         = go_fld_op op
     go (Coercion _co)       = emptyNameSet -- See wrinkle (ON1) of Note [Finding orphan names]
     go (App e1 e2)          = go e1 `unionNameSet` go e2
     go (Lam v e)            = go e `delFromNameSet` idName v
@@ -404,6 +409,8 @@ orphNamesOfExpr e
                               `unionNameSet` unionNameSets (map go_alt as)
 
     go_alt (Alt _ _ r)      = go r
+
+    go_fld_op (MkFieldOperation _ s t _) = orphNamesOfType s `unionNameSet` orphNamesOfType t
 
 -- | Finds the free /external/ names of several expressions: see 'exprOrphNames' for details
 orphNamesOfExprs :: [CoreExpr] -> NameSet
@@ -760,4 +767,7 @@ freeVars = go
         tickishFVs _                    = emptyDVarSet
 
     go (Type ty)     = (tyCoVarsOfTypeDSet ty, AnnType ty)
+    go (FieldOp op)  = (fld_op_fvs op, AnnFieldOp op)
     go (Coercion co) = (tyCoVarsOfCoDSet co, AnnCoercion co)
+
+    fld_op_fvs (MkFieldOperation _ s t _) = tyCoVarsOfTypeDSet s `unionFVs` tyCoVarsOfTypeDSet t

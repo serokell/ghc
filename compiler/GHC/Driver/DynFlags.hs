@@ -484,7 +484,12 @@ data DynFlags = DynFlags {
 
   -- | Configuration specifying which constructor names we should create
   -- distinct info tables for
-  distinctConstructorTables :: StgDebugDctConfig
+  distinctConstructorTables :: StgDebugDctConfig,
+
+  optimiseFieldSelectors :: Bool,
+  enableFieldSetters :: Bool,
+  optimiseFieldSetters :: Bool,
+  glueModifierFromSetterAndGetter :: Bool
 }
 
 class HasDynFlags m where
@@ -749,7 +754,11 @@ defaultDynFlags mySettings =
         maxErrors     = Nothing,
         cfgWeights    = defaultWeights,
 
-        distinctConstructorTables = None
+        distinctConstructorTables = None,
+        optimiseFieldSelectors = True,
+        enableFieldSetters = False,
+        optimiseFieldSetters = True,
+        glueModifierFromSetterAndGetter = False
       }
 
 type FatalMessager = String -> IO ()

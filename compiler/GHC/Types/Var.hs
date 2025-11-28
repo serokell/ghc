@@ -283,6 +283,9 @@ data Var
         id_details :: IdDetails,        -- Stable, doesn't change
         id_info    :: IdInfo }          -- Unstable, updated by simplifier
 
+instance Show Id where
+  show = show . varName
+
 -- | Identifier Scope
 data IdScope    -- See Note [GlobalId/LocalId]
   = GlobalId

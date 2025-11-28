@@ -437,6 +437,7 @@ dmdAnal env d e = -- pprTrace "dmdAnal" (ppr d <+> ppr e) $
 
 dmdAnal' _ _ (Lit lit)     = WithDmdType nopDmdType (Lit lit)
 dmdAnal' _ _ (Type ty)     = WithDmdType nopDmdType (Type ty) -- Doesn't happen, in fact
+dmdAnal' _ _ (FieldOp op) = WithDmdType nopDmdType (FieldOp op)
 dmdAnal' _ _ (Coercion co)
   = WithDmdType (noArgsDmdType (coercionDmdEnv co)) (Coercion co)
 

@@ -572,6 +572,7 @@ sizeExpr opts !bOMB_OUT_SIZE top_args expr
     size_up (Cast e _) = size_up e
     size_up (Tick _ e) = size_up e
     size_up (Type _)   = sizeZero           -- Types cost nothing
+    size_up (FieldOp _) = sizeZero
     size_up (Coercion _) = sizeZero
     size_up (Lit lit)  = sizeN (litSize lit)
     size_up (Var f) | isZeroBitId f = sizeZero

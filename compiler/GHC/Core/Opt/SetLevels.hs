@@ -338,6 +338,8 @@ lvlExpr env (_, AnnType ty)     = return (Type (substTyUnchecked (le_subst env) 
 lvlExpr env (_, AnnCoercion co) = return (Coercion (substCo (le_subst env) co))
 lvlExpr env (_, AnnVar v)       = return (lookupVar env v)
 lvlExpr _   (_, AnnLit lit)     = return (Lit lit)
+lvlExpr env (_, AnnFieldOp op)  = return (FieldOp $ lvl_fld_op op) where
+  lvl_fld_op (MkFieldOperation sort s t f) = MkFieldOperation sort (substTyUnchecked (le_subst env) s) (substTyUnchecked (le_subst env) t) f
 
 lvlExpr env (_, AnnCast expr (_, co)) = do
     expr' <- lvlNonTailExpr env expr

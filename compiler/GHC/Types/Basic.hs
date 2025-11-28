@@ -525,7 +525,7 @@ instance Binary PromotionFlag where
 -}
 
 data FunctionOrData = IsFunction | IsData
-    deriving (Eq, Ord, Data)
+    deriving (Eq, Ord, Data, Show)
 
 instance Outputable FunctionOrData where
     ppr IsFunction = text "(function)"
@@ -2277,7 +2277,7 @@ mightBeUnlifted _             = True
 
 data TypeOrConstraint
   = TypeLike | ConstraintLike
-  deriving( Eq, Ord, Data )
+  deriving( Eq, Ord, Data, Show )
 
 instance Binary TypeOrConstraint where
   put_ bh = \case

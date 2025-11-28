@@ -59,7 +59,7 @@ import GHC.Data.FastString
 
 import GHC.Unit.Module
 
-import GHC.Rename.Utils (genHsVar, genLHsApp, genLHsLit, genWildPat, wrapGenSpan)
+import GHC.Rename.Utils (genHsVar, genLHsApp, genLHsLit, genWildPat, wrapGenSpan, genSimpleConPat, genVarPat, genHsApps, genLHsVar)
 
 import GHC.Types.Basic
 import GHC.Types.FieldLabel
@@ -78,6 +78,9 @@ import GHC.Types.TyThing
 import qualified GHC.LanguageExtensions as LangExt
 
 import Control.Monad
+import GHC.Core (FieldOperation(..), FieldOpSort (..))
+import GHC.Driver.DynFlags
+import qualified Data.Semigroup as Semi
 
 {-
 ************************************************************************
@@ -763,7 +766,7 @@ addTyConsToGblEnv tyclss
     do { traceTc "tcAddTyCons" $ vcat
             [ text "tycons" <+> ppr tyclss
             , text "implicits" <+> ppr implicit_things ]
-       ; gbl_env <- tcRecSelBinds (mkRecSelBinds tyclss)
+       ; gbl_env <- tcRecSelBinds =<< (mkRecSelBinds tyclss)
        ; th_bndrs <- tcTyThBinders implicit_things
        ; return (gbl_env, th_bndrs)
        }
@@ -853,23 +856,34 @@ tcRecSelBinds sel_bind_prs
                                              , let loc = getSrcSpan sel_id ]
     binds = [(NonRecursive, [bind]) | (_, bind) <- sel_bind_prs]
 
-mkRecSelBinds :: [TyCon] -> [(Id, LHsBind GhcRn)]
+mkRecSelBinds :: [TyCon] -> TcM [(Id, LHsBind GhcRn)]
 -- See Note [Record selectors]
 mkRecSelBinds tycons
-  = map mkRecSelBind [ (tc,fld) | tc <- tycons
+  = concat <$> traverse mkRecSelBind [ (tc,fld) | tc <- tycons
                                 , fld <- tyConFieldLabels tc ]
 
-mkRecSelBind :: (TyCon, FieldLabel) -> (Id, LHsBind GhcRn)
+mkRecSelBind :: (TyCon, FieldLabel) -> TcM [(Id, LHsBind GhcRn)]
 mkRecSelBind (tycon, fl)
-  = mkOneRecordSelector all_cons (RecSelData tycon) fl
-        FieldSelectors  -- See Note [NoFieldSelectors and naughty record selectors]
+  = do sel@(sel_id, _) <- apply mkOneRecordSelector   -- See Note [NoFieldSelectors and naughty record selectors]
+       dyn <- getDynFlags
+       setters <- if enableFieldSetters dyn
+          then do
+            setter@(setter_id, _) <- apply mkOneRecordSetter
+            modifier <- apply (mkOneRecordModifier (getName sel_id) (getName setter_id) (glueModifierFromSetterAndGetter dyn))
+            pure [setter, modifier]
+          else pure []
+
+       pure (sel : setters)
   where
+    apply f = f all_cons (RecSelData tycon) fl FieldSelectors
     all_cons = map RealDataCon (tyConDataCons tycon)
 
 mkOneRecordSelector :: [ConLike] -> RecSelParent -> FieldLabel -> FieldSelectors
-                    -> (Id, LHsBind GhcRn)
+                    -> TcM (Id, LHsBind GhcRn)
 mkOneRecordSelector all_cons idDetails fl has_sel
-  = (sel_id, L (noAnnSrcSpan loc) sel_bind)
+  = do
+    dyn <- getDynFlags
+    pure (sel_id, L (noAnnSrcSpan loc) (sel_bind (optimiseFieldSelectors dyn)))
   where
     loc      = getSrcSpan sel_name
     loc'     = noAnnSrcSpan loc
@@ -926,14 +940,20 @@ mkOneRecordSelector all_cons idDetails fl has_sel
                             -- could improve on it in the case where all the
                             -- fields in all the constructor have multiplicity Many.
                           field_ty
+    ty = mkForAllTys sel_tvbs $ mkVisFunTyMany data_ty field_ty
 
     -- make the binding: sel (C2 { fld = x }) = x
     --                   sel (C7 { fld = x }) = x
     --    where cons_w_field = [C2,C7]
-    sel_bind = mkTopFunBind (Generated OtherExpansion SkipPmc) sel_lname alts
+    sel_bind opt_sel = mkTopFunBind (Generated OtherExpansion SkipPmc) sel_lname alts
       where
         alts | is_naughty = [mkSimpleMatch match_ctxt (noLocA []) unit_rhs]
-             | otherwise =  map mk_match cons_w_field ++ deflt
+             | opt_sel =  map mk_match cons_w_field ++ deflt
+             | otherwise =  [mkSimpleMatch match_ctxt (L (l2l loc') [L loc' (VarPat noExtField (L locn field_var))]) sel_expr]
+
+    sel_expr = mkHsApp (L loc' (XExpr (HsRecOp ty (MkFieldOperation SelectField data_ty field_ty lbl)))) $ L loc' (mkHsVar (L locn field_var))
+
+
     mk_match con = mkSimpleMatch match_ctxt
                                  (L (l2l loc') [L loc' (mk_sel_pat con)])
                                  (L loc' (mkHsVar (L locn field_var)))
@@ -977,6 +997,280 @@ mkOneRecordSelector all_cons idDetails fl has_sel
 
     unit_rhs = mkLHsTupleExpr [] noExtField
     msg_lit = HsStringPrim NoSourceText (bytesFS (field_label lbl))
+
+mkOneRecordSetter :: [ConLike] -> RecSelParent -> FieldLabel -> FieldSelectors
+                    -> TcM (Id, LHsBind GhcRn)
+mkOneRecordSetter all_cons idDetails fl has_sel
+  = do
+    dyn <- getDynFlags
+    uniq <- newUnique
+    pure (sel_id uniq, L (noAnnSrcSpan loc) (sel_bind uniq (optimiseFieldSetters dyn)))
+  where
+    loc      = getSrcSpan (flSelector fl)
+    loc'     = noAnnSrcSpan loc
+    locn     = noAnnSrcSpan loc
+    lbl      = flLabel fl
+    sel_name uniq = mkInternalName uniq (mkOccNameFS varName (field_label lbl Semi.<> fsLit "_setter")) loc
+    sel_lname uniq = L locn (sel_name uniq)
+    match_ctxt uniq = mkPrefixFunRhs (sel_lname uniq) noAnn
+
+    sel_id uniq = mkExportedLocalId rec_details (sel_name uniq) sel_ty
+
+    -- Find a representative constructor, con1
+    rec_sel_info@(RSI { rsi_def = cons_w_field })
+         = conLikesRecSelInfo all_cons [lbl]
+    con1 = assert (not (null cons_w_field)) $ head cons_w_field
+
+    -- Construct the IdDetails
+    rec_details = RecSelId { sel_tycon      = idDetails
+                           , sel_naughty    = is_naughty
+                           , sel_fieldLabel = fl
+                           , sel_cons       = rec_sel_info }
+                             -- See (IRS1) in Note [Detecting incomplete record selectors]
+                             -- in GHC.HsToCore.Pmc
+
+
+    -- Selector type; Note [Polymorphic selectors]
+    (_, _, _, _, req_theta, _, data_ty) = conLikeFullSig con1
+
+    field_ty     = conLikeFieldType con1 lbl
+    field_ty_tvs = tyCoVarsOfType field_ty
+    data_ty_tvs  = tyCoVarsOfType data_ty
+    sel_tvs      = field_ty_tvs `unionVarSet` data_ty_tvs
+    sel_tvbs     = filter (\tvb -> binderVar tvb `elemVarSet` sel_tvs) $
+                   conLikeUserTyVarBinders con1
+
+    -- is_naughty: see Note [Naughty record selectors]
+    is_naughty = isExistentialRecordField field_ty con1 || no_selectors
+
+    no_selectors   = has_sel == NoFieldSelectors
+      -- For PatternSynonyms with -XNoFieldSelectors, pretend the fields
+      -- are naughty record selectors to suppress making a binding.
+      --
+      -- See Note [NoFieldSelectors and naughty record selectors]
+
+    sel_ty | is_naughty = unitTy  -- See Note [Naughty record selectors]
+           | otherwise  = mkForAllTys sel_tvbs $
+                          -- Urgh! See Note [The stupid context] in GHC.Core.DataCon
+                          mkPhiTy (conLikeStupidTheta con1) $
+                          -- req_theta is empty for normal DataCon
+                          mkPhiTy req_theta                 $
+                          mkVisFunTyMany field_ty           $
+                          mkVisFunTyMany data_ty            $
+                            -- Record selectors are always typed with Many. We
+                            -- could improve on it in the case where all the
+                            -- fields in all the constructor have multiplicity Many.
+                          data_ty
+
+    ty = mkForAllTys sel_tvbs $ mkVisFunTyMany field_ty $ mkVisFunTyMany data_ty data_ty
+
+    -- make the binding: sel (C2 { fld = x }) = x
+    --                   sel (C7 { fld = x }) = x
+    --    where cons_w_field = [C2,C7]
+    sel_bind uniq opt_sel = mkTopFunBind (Generated OtherExpansion SkipPmc) (sel_lname uniq) alts
+      where
+        alts | is_naughty = [mkSimpleMatch (match_ctxt uniq) (noLocA []) unit_rhs]
+             | opt_sel =  map (mk_match uniq) cons_w_field ++ deflt uniq
+             | otherwise =  [mkSimpleMatch (match_ctxt uniq) (L (l2l loc') [L loc' (VarPat noExtField (L locn value_to_set)), L loc' (VarPat noExtField (L locn data_var))]) sel_expr]
+
+    sel_expr = mkHsApp (mkHsApp (L loc' (XExpr (HsRecOp ty (MkFieldOperation SetField data_ty field_ty lbl)))) $ L loc' (mkHsVar (L locn value_to_set))) $ L loc' (mkHsVar (L locn data_var))
+
+
+    mk_match uniq =
+      mk_set_fld_match (getOccName $ flSelector fl) fl
+        (\_ field_var -> (genWildPat, genLHsVar field_var)) (sel_name uniq) (match_ctxt uniq)
+
+    value_to_set = mkInternalName (mkBuiltinUnique 1) (mkOccName varName "val") loc
+    data_var = mkInternalName (mkBuiltinUnique 2) (mkOccName varName "obj") loc
+
+    -- Add catch-all default case unless the case is exhaustive
+    -- We do this explicitly so that we get a nice error message that
+    -- mentions this particular record selector
+    deflt uniq
+          | all dealt_with all_cons = []
+          | otherwise = [mkSimpleMatch (match_ctxt uniq) (wrapGenSpan [genWildPat])
+                            (genLHsApp
+                                (genHsVar (getName rEC_SEL_ERROR_ID))
+                                (genLHsLit msg_lit))]
+
+        -- Do not add a default case unless there are unmatched
+        -- constructors.  We must take account of GADTs, else we
+        -- get overlap warning messages from the pattern-match checker
+        -- NB: we need to pass type args for the *representation* TyCon
+        --     to dataConCannotMatch, hence the calculation of inst_tys
+        --     This matters in data families
+        --              data instance T Int a where
+        --                 A :: { fld :: Int } -> T Int Bool
+        --                 B :: { fld :: Int } -> T Int Char
+    dealt_with :: ConLike -> Bool
+    dealt_with (PatSynCon _) = False -- We can't predict overlap
+    dealt_with con@(RealDataCon dc)
+      = con `elem` cons_w_field || dataConCannotMatch inst_tys dc
+      where
+        inst_tys = dataConResRepTyArgs dc
+
+    unit_rhs = mkLHsTupleExpr [] noExtField
+    msg_lit = HsStringPrim NoSourceText (bytesFS (field_label lbl))
+
+mkOneRecordModifier :: Name -> Name -> Bool -> [ConLike] -> RecSelParent -> FieldLabel -> FieldSelectors
+                    -> TcM (Id, LHsBind GhcRn)
+mkOneRecordModifier selector_id setter_id glue_sel_setter all_cons idDetails fl has_sel
+  = do
+    dyn <- getDynFlags
+    uniq <- newUnique
+    pure (sel_id uniq, L (noAnnSrcSpan loc) (sel_bind uniq (optimiseFieldSetters dyn)))
+  where
+    loc      = getSrcSpan (flSelector fl)
+    loc'     = noAnnSrcSpan loc
+    locn     = noAnnSrcSpan loc
+    lbl      = flLabel fl
+    sel_name uniq = mkInternalName uniq (mkOccNameFS varName (field_label lbl Semi.<> fsLit "_modifier")) loc
+    sel_lname uniq = L locn (sel_name uniq)
+    match_ctxt uniq = mkPrefixFunRhs (sel_lname uniq) noAnn
+
+    sel_id uniq = mkExportedLocalId rec_details (sel_name uniq) id_ty
+
+    -- Find a representative constructor, con1
+    rec_sel_info@(RSI { rsi_def = cons_w_field })
+         = conLikesRecSelInfo all_cons [lbl]
+    con1 = assert (not (null cons_w_field)) $ head cons_w_field
+
+    -- Construct the IdDetails
+    rec_details = RecSelId { sel_tycon      = idDetails
+                           , sel_naughty    = is_naughty
+                           , sel_fieldLabel = fl
+                           , sel_cons       = rec_sel_info }
+                             -- See (IRS1) in Note [Detecting incomplete record selectors]
+                             -- in GHC.HsToCore.Pmc
+
+
+    -- Selector type; Note [Polymorphic selectors]
+    (_, _, _, _, req_theta, _, data_ty) = conLikeFullSig con1
+
+    field_ty     = conLikeFieldType con1 lbl
+    field_ty_tvs = tyCoVarsOfType field_ty
+    data_ty_tvs  = tyCoVarsOfType data_ty
+    sel_tvs      = field_ty_tvs `unionVarSet` data_ty_tvs
+    sel_tvbs     = filter (\tvb -> binderVar tvb `elemVarSet` sel_tvs) $
+                   conLikeUserTyVarBinders con1
+
+    -- is_naughty: see Note [Naughty record selectors]
+    is_naughty = isExistentialRecordField field_ty con1 || no_selectors
+
+    no_selectors   = has_sel == NoFieldSelectors
+      -- For PatternSynonyms with -XNoFieldSelectors, pretend the fields
+      -- are naughty record selectors to suppress making a binding.
+      --
+      -- See Note [NoFieldSelectors and naughty record selectors]
+
+    id_ty | is_naughty = unitTy  -- See Note [Naughty record selectors]
+           | otherwise  = mkForAllTys sel_tvbs $
+                          -- Urgh! See Note [The stupid context] in GHC.Core.DataCon
+                          mkPhiTy (conLikeStupidTheta con1) $
+                          -- req_theta is empty for normal DataCon
+                          mkPhiTy req_theta                 $
+                          mkVisFunTyMany (mkVisFunTyMany field_ty field_ty)           $
+                          mkVisFunTyMany data_ty            $
+                            -- Record selectors are always typed with Many. We
+                            -- could improve on it in the case where all the
+                            -- fields in all the constructor have multiplicity Many.
+                          data_ty
+
+    set_ty = mkForAllTys sel_tvbs $ mkVisFunTyMany field_ty $ mkVisFunTyMany data_ty $ data_ty
+    sel_ty = mkForAllTys sel_tvbs $ mkVisFunTyMany data_ty field_ty
+
+    -- make the binding: sel (C2 { fld = x }) = x
+    --                   sel (C7 { fld = x }) = x
+    --    where cons_w_field = [C2,C7]
+    sel_bind uniq opt_sel = mkTopFunBind (Generated OtherExpansion SkipPmc) (sel_lname uniq) alts
+      where
+        alts | is_naughty = [mkSimpleMatch (match_ctxt uniq) (noLocA []) unit_rhs]
+             | opt_sel = if glue_sel_setter then simple_lhs uniq glued_expr else map (mk_match uniq) cons_w_field ++ deflt uniq
+             | otherwise =  simple_lhs uniq sel_expr
+
+    simple_lhs uniq rhs = [mkSimpleMatch (match_ctxt uniq) (L (l2l loc')
+              [L loc' (VarPat noExtField (L locn value_to_set)), L loc' (VarPat noExtField (L locn data_var))]) rhs]
+
+    glued_expr =
+      mkHsApp (mkHsApp (var setter_id) $ (mkHsApp (var value_to_set) (mkHsApp (var selector_id) (var data_var)))) $ var data_var
+
+    sel_expr =
+      mkHsApp (mkHsApp (recOp set_ty SetField) $ (mkHsApp (var value_to_set) (mkHsApp (recOp sel_ty SelectField) (var data_var)))) $ var data_var
+
+    recOp ty sort = L loc' (XExpr (HsRecOp ty (MkFieldOperation sort data_ty field_ty lbl)))
+
+    var v = L loc' (mkHsVar (L locn v))
+
+    mk_match uniq = mk_set_fld_match (mkOccName varName "f") fl (\i fun_var ->
+        let fld_nm = mk_set_fld_bind i fl
+            expr = wrapGenSpan $ HsPar noExtField $ genLHsApp (genHsVar fun_var) (genLHsVar fld_nm)
+        in (genVarPat fld_nm, expr)) (sel_name uniq) (match_ctxt uniq)
+
+    value_to_set = mkInternalName (mkBuiltinUnique 1) (mkOccName varName "f") loc
+    data_var = mkInternalName (mkBuiltinUnique 2) (mkOccName varName "obj") loc
+
+    -- Add catch-all default case unless the case is exhaustive
+    -- We do this explicitly so that we get a nice error message that
+    -- mentions this particular record selector
+    deflt uniq
+          | all dealt_with all_cons = []
+          | otherwise = [mkSimpleMatch (match_ctxt uniq) (wrapGenSpan [genWildPat])
+                            (genLHsApp
+                                (genHsVar (getName rEC_SEL_ERROR_ID))
+                                (genLHsLit msg_lit))]
+
+        -- Do not add a default case unless there are unmatched
+        -- constructors.  We must take account of GADTs, else we
+        -- get overlap warning messages from the pattern-match checker
+        -- NB: we need to pass type args for the *representation* TyCon
+        --     to dataConCannotMatch, hence the calculation of inst_tys
+        --     This matters in data families
+        --              data instance T Int a where
+        --                 A :: { fld :: Int } -> T Int Bool
+        --                 B :: { fld :: Int } -> T Int Char
+    dealt_with :: ConLike -> Bool
+    dealt_with (PatSynCon _) = False -- We can't predict overlap
+    dealt_with con@(RealDataCon dc)
+      = con `elem` cons_w_field || dataConCannotMatch inst_tys dc
+      where
+        inst_tys = dataConResRepTyArgs dc
+
+    unit_rhs = mkLHsTupleExpr [] noExtField
+    msg_lit = HsStringPrim NoSourceText (bytesFS (field_label lbl))
+
+type FldBindMatchBuilder =
+  Name -> HsMatchContext (LocatedN Name) -> ConLike -> LMatch GhcRn (LHsExpr GhcRn)
+
+
+mk_set_fld_match :: OccName -> FieldLabel -> (Int -> Name -> (LPat GhcRn, LHsExpr GhcRn)) -> FldBindMatchBuilder
+mk_set_fld_match occ_name fl on_fld setter_name match_ctxt con =
+  let (lhs_con_pats, rhs_con_args)
+              = zipWithAndUnzip mk_con_arg [2..] con_fields
+      con_fields = conLikeFieldLabels con
+      con_name = conLikeName con
+
+  in mkSimpleMatch match_ctxt
+      (L loc [genVarPat arg_var, genSimpleConPat con_name lhs_con_pats])
+      (wrapGenSpan $ genHsApps con_name rhs_con_args)
+  where
+    loc :: HasAnnotation e => e
+    loc = noAnnSrcSpan (getSrcSpan setter_name)
+
+
+    mk_con_arg i fld_lbl
+      | fl == fld_lbl = on_fld i arg_var
+      | otherwise =
+          let fld_nm = mk_set_fld_bind i fld_lbl
+                      in (genVarPat fld_nm, genLHsVar fld_nm)
+
+    arg_var = mkInternalName (mkBuiltinUnique 1) occ_name loc
+
+mk_set_fld_bind :: Int -> FieldLabel -> Name
+mk_set_fld_bind i fld_lbl =
+  mkInternalName (mkBuiltinUnique i)
+    (nameOccName $ flSelector $ fld_lbl)
+    generatedSrcSpan
+
 
 {-
 Note [Polymorphic selectors]

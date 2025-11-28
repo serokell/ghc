@@ -1522,6 +1522,13 @@ scExpr' env (Var v)      = case scSubstId env v of
 scExpr' env (Type t)     =
   let !(MkSolo ty') = scSubstTy env t
   in return (nullUsage, Type ty', [])
+scExpr' env (FieldOp op) =
+  return (nullUsage, FieldOp $! scFld op, [])
+  where
+    scFld (MkFieldOperation sort s t f) =
+      let !(MkSolo s') = scSubstTy env s
+          !(MkSolo t') = scSubstTy env t
+      in MkFieldOperation sort s' t' f
 scExpr' env (Coercion c) = return (nullUsage, Coercion (scSubstCo env c), [])
 scExpr' _   e@(Lit {})   = return (nullUsage, e, [])
 scExpr' env (Tick t e)   = do (usg, e', ws) <- scExpr env e

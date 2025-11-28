@@ -1008,7 +1008,12 @@ lintCoreExpr (Lam var expr)
   = markAllJoinsBad $
     lintLambda var $ lintCoreExpr expr
 
+lintCoreExpr (FieldOp op)
+  = lintFieldOp op where
+    lintFieldOp (MkFieldOperation sort s t _) = -- TODO sand-witch: Check something more, like that selection from s of field f corresponds to t
+      return (case sort of SelectField -> mkVisFunTyMany s t; SetField -> mkVisFunTyMany s (mkVisFunTyMany t t), zeroUE)
 lintCoreExpr (Case scrut var alt_ty alts)
+
   = lintCaseExpr scrut var alt_ty alts
 
 -- This case can't happen; linting types in expressions gets routed through lintTyArg

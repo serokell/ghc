@@ -636,6 +636,7 @@ addTickHsExpr (XExpr (WrapExpr w e)) =
               (addTickHsExpr e)        -- Explicitly no tick on inside
 addTickHsExpr (XExpr (ExpandedThingTc o e)) = addTickHsExpanded o e
 
+addTickHsExpr e@(XExpr HsTcRecOp{})    = return e
 addTickHsExpr e@(XExpr (ConLikeTc {})) = return e
   -- We used to do a freeVar on a pat-syn builder, but actually
   -- such builders are never in the inScope env, which

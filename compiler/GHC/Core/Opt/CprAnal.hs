@@ -217,6 +217,7 @@ cprAnal env e = -- pprTraceWith "cprAnal" (\res -> ppr (fst (res)) $$ ppr e) $
 
 cprAnal' _ (Lit lit)     = (topCprType, Lit lit)
 cprAnal' _ (Type ty)     = (topCprType, Type ty)      -- Doesn't happen, in fact
+cprAnal' _ (FieldOp op) = (topCprType, FieldOp op)
 cprAnal' _ (Coercion co) = (topCprType, Coercion co)
 
 cprAnal' env (Cast e co)

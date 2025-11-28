@@ -93,6 +93,7 @@ doExpr env (Case scrut b ty alts) =
     doAlt (Alt con bs rhs)  = Alt con bs <$> doExpr env rhs
 doExpr env (Cast expr co)   = Cast <$> doExpr env expr <*> pure co
 doExpr env (Tick t e)       = Tick t <$> doExpr env e
+doExpr _env e@(FieldOp _)   = pure e
 doExpr _env e@(Type _)      = pure e
 doExpr _env e@(Coercion _)  = pure e
 
@@ -132,4 +133,3 @@ needsCallSiteCostCentre env i =
             Nothing -> True
         checkFunc =
             occNameMatches (ccfFuncName ccf) (getOccName i)
-

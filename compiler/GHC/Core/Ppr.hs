@@ -195,7 +195,7 @@ ppr_expr add_par (Var id)      = ppr_id_occ add_par id
 ppr_expr add_par (Type ty)     = add_par (text "TYPE:" <+> ppr ty)       -- Weird
 ppr_expr add_par (Coercion co) = add_par (text "CO:" <+> ppr co)
 ppr_expr add_par (Lit lit)     = pprLiteral add_par lit
-
+ppr_expr _add_par (FieldOp op)  = ppr op
 ppr_expr add_par (Cast expr co)
   = add_par $ sep [pprParendExpr expr, text "`cast`" <+> pprOptCo co]
 

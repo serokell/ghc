@@ -71,6 +71,7 @@ exitifyProgram binds = map goTopLvl binds
     go :: InScopeSet -> CoreExpr -> CoreExpr
     go _    e@(Var{})       = e
     go _    e@(Lit {})      = e
+    go _    e@(FieldOp{})   = e
     go _    e@(Type {})     = e
     go _    e@(Coercion {}) = e
     go in_scope (Cast e' c) = Cast (go in_scope e') c

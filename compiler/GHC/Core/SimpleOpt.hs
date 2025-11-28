@@ -285,6 +285,8 @@ simple_opt_expr env expr
 
     go (App e1 e2)      = simple_app env e1 [(env,e2)]
     go (Type ty)        = Type     (substTyUnchecked subst ty)
+    go (FieldOp op)     = FieldOp (go_fld_op op) where
+      go_fld_op (MkFieldOperation sort s t f) = MkFieldOperation sort (substTyUnchecked subst s) (substTyUnchecked subst t) f
     go (Coercion co)    = Coercion (go_co co)
     go (Lit lit)        = Lit lit
     go (Tick tickish e) = mkTick (substTickish subst tickish) (go e)

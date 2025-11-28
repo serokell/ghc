@@ -2019,6 +2019,15 @@ dynamic_flags_deps = [
     , make_ord_flag defFlag "ddisable-js-c-sources" (NoArg (setGeneralFlag Opt_DisableJsCsources))
     ]
 
+ ++ [ make_ord_flag defFlag "fopt-selectors" (noArg $ \d -> d { optimiseFieldSelectors = True }  )
+    , make_ord_flag defFlag "fno-opt-selectors" (noArg $ \d -> d { optimiseFieldSelectors = False }  )
+    , make_ord_flag defFlag "fgen-setters" (noArg $ \d -> d { enableFieldSetters = True } )
+    , make_ord_flag defFlag "fno-gen-setters" (noArg $ \d -> d { enableFieldSetters = False } )
+    , make_ord_flag defFlag "fopt-setters" (noArg $ \d -> d { optimiseFieldSetters = True } )
+    , make_ord_flag defFlag "fno-opt-setters" (noArg $ \d -> d { optimiseFieldSetters = False } )
+    , make_ord_flag defFlag "fmodifier-via-setter" (noArg $ \d -> d { glueModifierFromSetterAndGetter = True } )
+    , make_ord_flag defFlag "fno-modifier-via-setter" (noArg $ \d -> d { glueModifierFromSetterAndGetter = False } )
+    ]
      ------ Language flags -------------------------------------------------
  ++ map (mkFlag turnOn  "f"         setExtensionFlag  ) fLangFlagsDeps
  ++ map (mkFlag turnOff "fno-"      unSetExtensionFlag) fLangFlagsDeps
@@ -2026,6 +2035,7 @@ dynamic_flags_deps = [
  ++ map (mkFlag turnOff "XNo"       unSetExtensionFlag) xFlagsDeps
  ++ map (mkFlag turnOn  "X"         setLanguage       ) languageFlagsDeps
  ++ map (mkFlag turnOn  "X"         setSafeHaskell    ) safeHaskellFlagsDeps
+
 
 -- | Warnings have both new-style flags to control their state (@-W@, @-Wno-@,
 -- @-Werror=@, @-Wwarn=@) and old-style flags (@-fwarn-@, @-fno-warn-@).  We

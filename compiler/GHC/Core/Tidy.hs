@@ -208,6 +208,8 @@ computeCbvInfo fun_id rhs
 tidyExpr :: TidyEnv -> CoreExpr -> CoreExpr
 tidyExpr env (Var v)       = Var (tidyVarOcc env v)
 tidyExpr env (Type ty)     = Type (tidyType env ty)
+tidyExpr env (FieldOp op)  = FieldOp (tidyFldOp op) where
+  tidyFldOp (MkFieldOperation sort s t f) = MkFieldOperation sort (tidyType env s) (tidyType env t) f
 tidyExpr env (Coercion co) = Coercion (tidyCo env co)
 tidyExpr _   (Lit lit)     = Lit lit
 tidyExpr env (App f a)     = App (tidyExpr env f) (tidyExpr env a)

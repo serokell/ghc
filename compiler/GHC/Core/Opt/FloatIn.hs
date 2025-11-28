@@ -155,6 +155,7 @@ fiExpr _ to_drop (_, AnnLit lit)     = wrapFloats to_drop (Lit lit)
 fiExpr _ to_drop (_, AnnType ty)     = assert (null to_drop) $ Type ty
 fiExpr _ to_drop (_, AnnVar v)       = wrapFloats to_drop (Var v)
 fiExpr _ to_drop (_, AnnCoercion co) = wrapFloats to_drop (Coercion co)
+fiExpr _ to_drop (_, AnnFieldOp op)  = assert (null to_drop) $ FieldOp op
 fiExpr platform to_drop (_, AnnCast expr (co_ann, co))
   = wrapFloats drop_here $
     Cast (fiExpr platform e_drop expr) co

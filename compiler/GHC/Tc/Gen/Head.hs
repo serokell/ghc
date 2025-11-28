@@ -566,6 +566,7 @@ tcInferAppHead_maybe fun
   = case fun of
       HsVar _ nm                -> Just <$> tcInferId nm
       XExpr (HsRecSelRn f)      -> Just <$> tcInferRecSelId f
+      XExpr (HsRecOp ty op)     -> return $ Just (XExpr $ HsTcRecOp ty op, ty)
       ExprWithTySig _ e hs_ty   -> Just <$> tcExprWithSig e hs_ty
       HsOverLit _ lit           -> Just <$> tcInferOverLit lit
       _                         -> return Nothing

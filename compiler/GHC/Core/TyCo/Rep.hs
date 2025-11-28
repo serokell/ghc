@@ -200,6 +200,9 @@ data Type
 
   deriving Data.Data
 
+instance Show Type where
+  show _ = "type"
+
 instance Outputable Type where
   ppr = pprType
 

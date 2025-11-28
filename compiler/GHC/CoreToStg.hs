@@ -37,7 +37,7 @@ import GHC.Types.Id.Info
 import GHC.Types.CostCentre
 import GHC.Types.Tickish
 import GHC.Types.Var.Env
-import GHC.Types.Name   ( isExternalName )
+import GHC.Types.Name   ( isExternalName, mkInternalName )
 import GHC.Types.Basic  ( Arity, TypeOrConstraint(..) )
 import GHC.Types.Literal
 import GHC.Types.ForeignCall
@@ -53,7 +53,19 @@ import GHC.Utils.Monad
 import GHC.Utils.Misc (HasDebugCallStack)
 import GHC.Utils.Panic
 
-import Control.Monad (ap)
+import Control.Monad (ap, forM, when)
+import GHC.Core.TyCo.Rep (Type(..), Scaled (..))
+import GHC.Builtin.Uniques
+import GHC.Types.SrcLoc (noSrcSpan)
+import GHC.Builtin.Types (manyDataConTy)
+import GHC.Types.Name.Occurrence
+import Control.Monad.Trans.Writer.CPS
+import Data.Monoid (Any(..), First (..))
+import GHC.Core.Make (rEC_SEL_ERROR_ID)
+import qualified Data.ByteString.Char8 as BS
+import GHC.Stack (HasCallStack)
+import Debug.Trace
+import GHC.Core.Subst
 
 -- Note [Live vs free]
 -- ~~~~~~~~~~~~~~~~~~~
@@ -391,7 +403,7 @@ coreToTopStgRhs opts this_mod ccs (bndr, rhs)
 -- handle with the function coreToMkStgRhs.
 
 coreToStgExpr
-        :: HasDebugCallStack => CoreExpr
+        :: HasCallStack => CoreExpr
         -> CtsM StgExpr
 
 -- The second and third components can be derived in a simple bottom up pass, not
@@ -412,6 +424,8 @@ coreToStgExpr (Coercion _)
 coreToStgExpr expr@(App _ _)
   = case app_head of
       Var f -> coreToStgApp f args ticks res_ty -- Regular application
+      FieldOp op
+        | (target : rest) <- args -> fieldOpToStg op target rest res_ty
       Lit l | isLitRubbish l  -- Discard arguments if head is LitRubbish
                               -- Recompute representation, because in
                               -- '(RUBBISH[rep] x) :: (T :: TYPE rep2)'
@@ -460,6 +474,12 @@ coreToStgExpr (Case scrut bndr _ alts)
   -- See (U2) in Note [Implementing unsafeCoerce] in base:Unsafe.Coerce
   = coreToStgExpr rhs
 
+  | FieldOp{} <- scrut
+  , [Alt DEFAULT [] expr] <- alts
+  = do
+    scope <- getInScopeSet
+    let subst = extendIdSubst (mkEmptySubst scope) bndr scrut
+    coreToStgExpr (substExpr subst expr)
   | otherwise
   = do { scrut2 <- coreToStgExpr scrut
        ; alts2 <- extendVarEnvCts [(bndr, LambdaBound)] (mapM vars_alt alts)
@@ -479,6 +499,64 @@ coreToStgExpr (Case scrut bndr _ alts)
 
 coreToStgExpr (Let bind body) = coreToStgLet bind body
 coreToStgExpr e               = pprPanic "coreToStgExpr" (ppr e)
+
+fieldOpToStg :: HasCallStack => FieldOperation -> CoreExpr -> [CoreArg] -> Type -> CtsM StgExpr
+fieldOpToStg (MkFieldOperation sort s _ f) first_arg other_args res_ty
+  | SelectField <- sort = mk_сase first_arg res_ty (sel_rhs other_args)
+  | SetField <- sort
+  , [scrut] <- other_args = mk_сase scrut res_ty (setter_rhs first_arg)
+  | otherwise = panic ""
+  where
+    sel_rhs args fld _ _ = coreToStgApp fld args [] res_ty
+    setter_rhs to_set fld (con :: DataCon) flds = coreToStgApp (dataConWrapId con) (map (\f -> if f == fld then to_set else Var f) flds) [] res_ty
+
+    mk_сase arg res_ty mk_rhs = do
+      scrut <- coreToStgExpr arg
+      let (tycon, tyargs) = case s of
+            TyConApp t args -> (t, args)
+            _ -> panic "not a tycon"
+          cons = tyConDataCons tycon
+
+      StgCase scrut (mk_id 1 (mkOccName varName "_") manyDataConTy s) (AlgAlt tycon) <$> mk_alts cons tyargs res_ty mk_rhs
+
+    mk_alts cons tyargs res_ty mk_rhs = do
+      let
+        go [] = pure []
+        go (con:cons) = do
+          alt_tail <- go cons
+          res <- mk_alt tyargs mk_rhs con
+          case res of
+            Just alt -> pure (alt:alt_tail)
+            Nothing -> pure alt_tail
+      let (alts, partial) = runWriter (go cons)
+
+      let dflt = GenStgAlt DEFAULT [] <$> coreToStgApp rEC_SEL_ERROR_ID [Lit (LitString (BS.pack "default case of field selection"))] [] res_ty
+      let insert_dflt = if getAny partial then (dflt:) else id
+      sequenceA $ insert_dflt alts
+
+    mk_alt tyargs mk_rhs con
+      | let flds = dataConFieldLabels con
+      , let fld_tys = dataConInstArgTys con tyargs
+      , not (null flds) = do
+
+      let (fld_binders, m_fld) = mk_fld_ids flds fld_tys
+      case getFirst m_fld of
+            Nothing -> do
+              tell (Any True)
+              pure Nothing
+            Just fld -> pure $ Just $ GenStgAlt @Vanilla (DataAlt con) fld_binders <$> (mk_rhs fld con fld_binders)
+    mk_alt _ _ _ = do
+      tell (Any True)
+      pure Nothing
+
+    mk_fld_ids flds fld_tys = runWriter $
+      forM (zip [2 ..] $ zip flds fld_tys) $ \(ix, (fld, Scaled mult ty)) -> do
+        let fld_id = mk_id ix (occName fld) mult ty
+        when (flLabel fld == f) $ tell (First (Just fld_id))
+        pure fld_id
+
+    mk_id uniq occ mult ty =
+      mkLocalId (mkInternalName (mkBuiltinUnique uniq) occ noSrcSpan) mult ty
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
 mkStgAltType bndr alts
@@ -596,7 +674,7 @@ sumPrimReps _ = []
 -- This is the guy that turns applications into A-normal form
 -- ---------------------------------------------------------------------------
 
-getStgArgFromTrivialArg :: HasDebugCallStack => CoreArg -> StgArg
+getStgArgFromTrivialArg :: HasCallStack => CoreArg -> StgArg
 -- A (non-erased) trivial CoreArg corresponds to an atomic StgArg.
 -- CoreArgs may not immediately look trivial, e.g., `case e of {}` or
 -- `case unsafeequalityProof of UnsafeRefl -> e` might intervene.
@@ -710,11 +788,12 @@ coreToStgRhs (bndr, rhs) = do
 
 -- Convert the RHS of a binding from Core to STG. This is a wrapper around
 -- coreToStgExpr that can handle value lambdas.
-coreToMkStgRhs :: HasDebugCallStack => Id -> CoreExpr -> CtsM MkStgRhs
+coreToMkStgRhs :: HasCallStack => Id -> CoreExpr -> CtsM MkStgRhs
 coreToMkStgRhs bndr expr = do
   let (args, body) = myCollectBinders expr
   let args'        = filterStgBinders args
-  extendVarEnvCts [ (a, LambdaBound) | a <- args' ] $ do
+  extendVarEnvCts [ (a, LambdaBound) | a <- args' ] -- $ traceShow body
+    $ do
     body' <- coreToStgExpr body
     let mk_rhs = MkStgRhs
           { rhs_args = args'
@@ -735,6 +814,7 @@ coreToMkStgRhs bndr expr = do
 newtype CtsM a = CtsM
     { unCtsM :: Platform -- Needed for checking for bad coercions in coreToStgArgs
              -> IdEnv HowBound
+             -> InScopeSet
              -> a
     }
     deriving (Functor)
@@ -772,19 +852,17 @@ data LetInfo
 -- The std monad functions:
 
 initCts :: Platform -> IdEnv HowBound -> CtsM a -> a
-initCts platform env m = unCtsM m platform env
-
-
+initCts platform env m = unCtsM m platform env emptyInScopeSet
 
 {-# INLINE thenCts #-}
 {-# INLINE returnCts #-}
 
 returnCts :: a -> CtsM a
-returnCts e = CtsM $ \_ _ -> e
+returnCts e = CtsM $ \_ _ _ -> e
 
 thenCts :: CtsM a -> (a -> CtsM b) -> CtsM b
-thenCts m k = CtsM $ \platform env
-  -> unCtsM (k (unCtsM m platform env)) platform env
+thenCts m k = CtsM $ \platform env scope
+  -> unCtsM (k (unCtsM m platform env scope)) platform env scope
 
 instance Applicative CtsM where
     pure = returnCts
@@ -794,17 +872,20 @@ instance Monad CtsM where
     (>>=)  = thenCts
 
 getPlatform :: CtsM Platform
-getPlatform = CtsM const
+getPlatform = CtsM $ \p _ _ -> p
 
 -- Functions specific to this monad:
 
+getInScopeSet :: CtsM InScopeSet
+getInScopeSet = CtsM $ \_ _ scope -> scope
+
 extendVarEnvCts :: [(Id, HowBound)] -> CtsM a -> CtsM a
 extendVarEnvCts ids_w_howbound expr
-   =    CtsM $   \platform env
-   -> unCtsM expr platform (extendVarEnvList env ids_w_howbound)
+   =    CtsM $   \platform env scope
+   -> unCtsM expr platform (extendVarEnvList env ids_w_howbound) (extendInScopeSetList scope (map fst ids_w_howbound))
 
 lookupVarCts :: Id -> CtsM HowBound
-lookupVarCts v = CtsM $ \_ env -> lookupBinding env v
+lookupVarCts v = CtsM $ \_ env _ -> lookupBinding env v
 
 lookupBinding :: IdEnv HowBound -> Id -> HowBound
 lookupBinding env v = case lookupVarEnv env v of

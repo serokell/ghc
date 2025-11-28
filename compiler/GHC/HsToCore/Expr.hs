@@ -295,6 +295,7 @@ dsExpr e@(XExpr ext_expr_tc)
       HsRecSelTc {} -> dsApp e
       WrapExpr {}   -> dsApp e
       ConLikeTc {}  -> dsApp e
+      HsTcRecOp _ op -> pure (FieldOp op)
 
       ExpandedThingTc o e
         | OrigStmt (L loc _) <- o

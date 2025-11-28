@@ -369,6 +369,9 @@ data OccName = OccName
     , occNameFS     :: !FastString
     }
 
+instance Show OccName where
+  show = unpackFS . occNameFS
+
 instance Eq OccName where
     (OccName sp1 s1) == (OccName sp2 s2) = s1 == s2 && sp1 == sp2
 

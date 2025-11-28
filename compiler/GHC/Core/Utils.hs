@@ -147,6 +147,11 @@ exprType e@(App _ _)
   = case collectArgs e of
         (fun, args) -> applyTypeToArgs (exprType fun) args
 exprType (Type ty) = pprPanic "exprType" (ppr ty)
+exprType (FieldOp op) = fieldOpTy op where
+    fieldOpTy (MkFieldOperation SelectField s t _) =
+      mkVisFunTyMany s t
+    fieldOpTy (MkFieldOperation SetField s t _) =
+      mkVisFunTyMany t (mkVisFunTyMany s s)
 
 coreAltType :: CoreAlt -> Type
 -- ^ Returns the type of the alternatives right hand side
@@ -1529,6 +1534,7 @@ exprIsCheapX ok_app expandable e
     go _ (Lit {})                     = True
     go _ (Type {})                    = True
     go _ (Coercion {})                = True
+    go n (FieldOp _)                  = n == 1
     go n (Cast e _)                   = go n e
     go n (Case scrut _ _ alts)        = not expandable && ok scrut &&
                                         and [ go n rhs | Alt _ _ rhs <- alts ]

@@ -67,6 +67,10 @@ seqExpr (Cast e co)     = seqExpr e `seq` seqCo co
 seqExpr (Tick n e)      = seqTickish n `seq` seqExpr e
 seqExpr (Type t)        = seqType t
 seqExpr (Coercion co)   = seqCo co
+seqExpr (FieldOp op)    = seqFld op
+
+seqFld :: FieldOperation -> ()
+seqFld (MkFieldOperation !_ s t f) = seqType s `seq` seqType t `seq` f `seq` ()
 
 seqExprs :: [CoreExpr] -> ()
 seqExprs [] = ()

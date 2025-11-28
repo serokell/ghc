@@ -1354,6 +1354,7 @@ instance HiePass p => ToHie (LocatedA (HsExpr (GhcPass p))) where
           HsRecSelTc fld
             -> [ toHie $ RFC RecFieldOcc Nothing (L mspan fld)
                ]
+          HsTcRecOp{} -> []
         HieRn -> case x of
           HsRecSelRn fld
             -> [ toHie $ RFC RecFieldOcc Nothing (L mspan fld)

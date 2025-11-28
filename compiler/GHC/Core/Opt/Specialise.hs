@@ -1195,6 +1195,9 @@ specExpr env (Var v)       = specVar env v
 specExpr env (Type ty)     = return (Type     (substTy env ty), emptyUDs)
 specExpr env (Coercion co) = return (Coercion (substCo env co), emptyUDs)
 specExpr _   (Lit lit)     = return (Lit lit,                   emptyUDs)
+specExpr env (FieldOp op)
+    = return (FieldOp $! specFld op, emptyUDs)
+    where specFld (MkFieldOperation sort s t f) = MkFieldOperation sort (substTy env s) (substTy env t) f
 specExpr env (Cast e co)
   = do { (e', uds) <- specExpr env e
        ; return ((mkCast e' (substCo env co)), uds) }

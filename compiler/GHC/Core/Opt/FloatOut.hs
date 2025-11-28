@@ -347,6 +347,7 @@ floatExpr (Var v)   = (zeroStats, emptyFloats, Var v)
 floatExpr (Type ty) = (zeroStats, emptyFloats, Type ty)
 floatExpr (Coercion co) = (zeroStats, emptyFloats, Coercion co)
 floatExpr (Lit lit) = (zeroStats, emptyFloats, Lit lit)
+floatExpr (FieldOp op) = (zeroStats, emptyFloats, FieldOp op)
 
 floatExpr (App e a)
   = case (floatExpr  e) of { (fse, floats_e, e') ->

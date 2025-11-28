@@ -1744,6 +1744,7 @@ exprIsDeadEnd e
     go _ (Lit {})                = False
     go _ (Type {})               = False
     go _ (Coercion {})           = False
+    go _ (FieldOp {})            = False
     go n (App e a) | isTypeArg a = go n e
                    | otherwise   = go (n+1) e
     go n (Tick _ e)              = go n e

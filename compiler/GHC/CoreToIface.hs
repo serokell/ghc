@@ -90,6 +90,8 @@ import GHC.Hs.Extension (GhcRn)
 
 import Data.Maybe ( isNothing, catMaybes )
 
+import Language.Haskell.Syntax.Basic
+
 {- Note [Avoiding space leaks in toIface*]
    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -568,6 +570,8 @@ toIfaceExpr (Case s x ty as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
 toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (toIfaceCoercion co)
 toIfaceExpr (Tick t e)      = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
+toIfaceExpr (FieldOp op)    = IfaceFieldOp (toIfaceFldOp op) where
+  toIfaceFldOp (MkFieldOperation sort s t f) = IfaceMkFieldOperation sort (toIfaceType s) (toIfaceType t) (field_label f)
 
 toIfaceOneShot :: Id -> IfaceOneShot
 toIfaceOneShot id | isId id

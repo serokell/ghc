@@ -709,6 +709,8 @@ cseExpr :: CSEnv -> InExpr -> OutExpr
 cseExpr env (Type t)              = Type (substTyUnchecked (csEnvSubst env) t)
 cseExpr env (Coercion c)          = Coercion (substCo (csEnvSubst env) c)
 cseExpr _   (Lit lit)             = Lit lit
+cseExpr env (FieldOp op) = FieldOp $ cseFld op
+  where cseFld (MkFieldOperation sort s t f) = MkFieldOperation sort (substTyUnchecked (csEnvSubst env) s) (substTyUnchecked (csEnvSubst env) t) f
 cseExpr env (Var v)               = lookupSubst env v
 cseExpr env (App f a)             = App (cseExpr env f) (tryForCSE env a)
 cseExpr env (Tick t e)            = Tick t (cseExpr env e)

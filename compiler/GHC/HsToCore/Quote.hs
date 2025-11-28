@@ -1747,6 +1747,7 @@ repE e@(XExpr (ExpandedThingRn o x))
 
 repE (XExpr (PopErrCtxt (L _ e))) = repE e
 repE (XExpr (HsRecSelRn (FieldOcc _ (L _ x)))) = repE (mkHsVar (noLocA x))
+repE e@(XExpr (HsRecOp{})) = notHandled (ThExpressionForm e)
 
 repE e@(HsPragE _ (HsPragSCC {}) _) = notHandled (ThCostCentres e)
 repE e@(HsTypedBracket{})   = notHandled (ThExpressionForm e)

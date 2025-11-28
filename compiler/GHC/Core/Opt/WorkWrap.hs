@@ -114,6 +114,7 @@ wwExpr _ e@(Type {}) = return e
 wwExpr _ e@(Coercion {}) = return e
 wwExpr _ e@(Lit  {}) = return e
 wwExpr _ e@(Var  {}) = return e
+wwExpr _ e@(FieldOp {}) = return e
 
 wwExpr ww_opts (Lam binder expr)
   = Lam new_binder <$> wwExpr ww_opts expr

@@ -980,6 +980,8 @@ makeDictsCoherent var@(Var v)
   = mkImpossibleExpr ty "Solver.makeDictsCoherent"
   | otherwise
   = var
+makeDictsCoherent sel@FieldOp{}
+  = sel
 makeDictsCoherent lit@(Lit {})
   = lit
 makeDictsCoherent (App f a)
