@@ -12,6 +12,7 @@
 
 module GHC.StgToCmm.Expr ( cgExpr, cgSelectField, cgLit ) where
 
+import Language.Haskell.Syntax.Basic
 import GHC.Prelude hiding ((<*>))
 
 import {-# SOURCE #-} GHC.StgToCmm.Bind ( cgBind )
@@ -45,7 +46,7 @@ import GHC.Builtin.PrimOps
 import GHC.Core.TyCon
 import GHC.Core.Type        ( isUnliftedType, Scaled, Mult )
 import GHC.Core.TyCo.Rep    ( Type )
-import GHC.Types.RepType    ( isZeroBitTy, countConRepArgs, mightBeFunTy )
+import GHC.Types.RepType    ( isZeroBitTy, countConRepArgs, mightBeFunTy, typePrimRepU )
 import GHC.Types.CostCentre ( CostCentreStack, currentCCS )
 import GHC.Types.Tickish
 import GHC.Data.Maybe
@@ -697,18 +698,20 @@ cgSelectField f scrut s tycon tyargs = do
        cg_alt :: DataCon -> Maybe (FCode (AltCon, CmmAGraphScoped))
        cg_alt con
          = do
+
             let flds = dataConFieldLabels con
             guard (not (null flds))
             field_idx <- findIndex (\fld -> flLabel fld == f) flds
 
-            let fld_tys = dataConInstArgTys con tyargs
+            let fld_tys = dataConRepArgTys con  -- FIXME: instantiation for result_fld
                 mk_binder i fld (Scaled mult ty) = select_field_mk_id (i + 2) (occName fld) mult ty
                 result_fld = mk_binder field_idx (flds !! field_idx) (fld_tys !! field_idx)
 
             Just $
               getCodeScoped             $
               maybeAltHeapCheck (gc_plan, ret_kind) $
-              do { -- Optimization: we know all binders except result_fld are dead,
+              do { all_constr_offsets <- getConstrOffsets con
+                   -- Optimization: we know all binders except result_fld are dead,
                    -- so we skip bindConArgs and directly load just the one field.
                    -- This avoids generating dead loads that would otherwise need
                    -- to be eliminated by CmmSink.
@@ -718,11 +721,7 @@ cgSelectField f scrut s tycon tyargs = do
                        tag = tagForCon platform con
                        -- Compute the offset for our field by calculating offsets
                        -- for all fields up to and including field_idx
-                       all_args = assertNonVoidIds $ zipWith3 mk_binder [0..field_idx] flds fld_tys
-                       (_, _, all_offsets) = mkVirtConstrOffsets profile (addIdReps all_args)
-                       offset = case all_offsets of
-                                  [] -> panic "cgSelectField: no offsets"
-                                  _ -> snd (last all_offsets)
+                       Just offset = lookupFsEnv all_constr_offsets (field_label (flLabel (flds !! field_idx)))
                  ; emit $ mkTaggedObjectLoad platform (idToReg platform arg)
                                               base_reg offset tag
                  ; _ <- bindArgToReg arg

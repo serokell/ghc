@@ -58,6 +58,8 @@ module GHC.StgToCmm.Monad (
         -- ideally we wouldn't export these, but some other modules access internal state
         getState, setState, getSelfLoop, withSelfLoop, getStgToCmmConfig,
 
+        getConstrOffsets,
+
         -- more localised access to monad state
         CgIdInfo(..),
         getBinds, setBinds,
@@ -67,6 +69,7 @@ module GHC.StgToCmm.Monad (
 
 import GHC.Prelude hiding( sequence, succ )
 
+import Language.Haskell.Syntax.Basic
 import GHC.Platform
 import GHC.Platform.Profile
 import GHC.Cmm
@@ -80,6 +83,8 @@ import GHC.Runtime.Heap.Layout
 import GHC.Unit
 import GHC.Types.Id
 import GHC.Types.Var.Env
+import GHC.Types.Name
+import GHC.Types.Name.Env
 import GHC.Data.OrdList
 import GHC.Types.Basic( ConTagZ )
 import GHC.Types.Unique
@@ -90,9 +95,17 @@ import GHC.Utils.Outputable
 import GHC.Utils.Panic
 import GHC.Utils.Constants (debugIsOn)
 import GHC.Exts (oneShot)
+import GHC.Core.DataCon
+import GHC.Core.Type
+import GHC.Core.TyCo.Rep
+import GHC.Types.RepType
+import {-# SOURCE #-} GHC.StgToCmm.Layout (mkVirtConstrOffsets)
 
 import Control.Monad
+import Data.IORef
 import Data.List (mapAccumL)
+import Debug.Trace
+import System.IO.Unsafe (unsafePerformIO)
 
 
 --------------------------------------------------------
@@ -456,6 +469,36 @@ newUnique = do
 newTemp :: DSM.MonadGetUnique m => CmmType -> m LocalReg
 newTemp rep = do { uniq <- DSM.getUniqueM
                  ; return (LocalReg uniq rep) }
+
+-- Global cache for constructor field offsets
+-- Global cache for constructor field offsets
+{-# NOINLINE globalConstrOffsetsCache #-}
+globalConstrOffsetsCache :: IORef (NameEnv (FastStringEnv ByteOff))
+globalConstrOffsetsCache = unsafePerformIO (newIORef emptyNameEnv)
+
+-- The () parameter prevents sharing/CSE across calls
+{-# NOINLINE readConstrOffsetsCache #-}
+readConstrOffsetsCache :: Name -> Maybe (FastStringEnv ByteOff)
+readConstrOffsetsCache name = unsafePerformIO ((\cache -> lookupNameEnv cache name) <$> readIORef globalConstrOffsetsCache)
+
+{-# NOINLINE writeConstrOffsetsCache #-}
+writeConstrOffsetsCache :: Name -> FastStringEnv ByteOff -> FCode (FastStringEnv ByteOff)
+writeConstrOffsetsCache name offsets = unsafePerformIO $
+  atomicModifyIORef' globalConstrOffsetsCache $ \env ->
+    (extendNameEnv env name offsets, return offsets)
+
+getConstrOffsets :: DataCon -> FCode (FastStringEnv ByteOff)
+getConstrOffsets con = do
+  case readConstrOffsetsCache (getName con) of
+    Just offsets -> return offsets
+    Nothing -> do
+      trace ("recomputing getConstrOffsets for " ++ show (getName con)) $ do
+        profile <- getProfile
+        let all_args = zipWith mk (dataConFieldLabels con) (dataConRepArgTys con)
+            mk fld (Scaled _ ty) = NonVoid (typePrimRepU ty, fld)
+            (_, _, all_offsets) = mkVirtConstrOffsets profile all_args
+            offsets = mkFsEnv [(field_label (flLabel fld), offset) | (NonVoid fld, offset) <- all_offsets]
+        writeConstrOffsetsCache (getName con) offsets
 
 ------------------
 initFCodeState :: Platform -> FCodeState
