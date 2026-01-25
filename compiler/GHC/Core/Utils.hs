@@ -128,7 +128,7 @@ import qualified Data.Set as Set
 ************************************************************************
 -}
 
-exprType :: HasDebugCallStack => CoreExpr -> Type
+exprType :: HasCallStack => CoreExpr -> Type
 -- ^ Recover the type of a well-typed Core expression. Fails when
 -- applied to the actual 'GHC.Core.Type' expression as it cannot
 -- really be said to have a type
@@ -229,7 +229,7 @@ Various possibilities suggest themselves:
 Note that there might be existentially quantified coercion variables, too.
 -}
 
-applyTypeToArgs :: HasDebugCallStack => Type -> [CoreExpr] -> Type
+applyTypeToArgs :: HasCallStack => Type -> [CoreExpr] -> Type
 -- ^ Determines the type resulting from applying an expression with given type
 --- to given argument expressions.
 applyTypeToArgs op_ty args

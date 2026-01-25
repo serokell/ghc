@@ -38,7 +38,7 @@ import GHC.Cmm.Graph
 import GHC.Stg.Syntax
 import GHC.Cmm
 import GHC.Unit         ( rtsUnit )
-import GHC.Core.Type    ( Type, tyConAppTyCon_maybe, Mult )
+import GHC.Core.Type    ( Type, tyConAppTyCon_maybe )
 import GHC.Core.TyCon
 import GHC.Cmm.CLabel
 import GHC.Cmm.Info     ( closureInfoPtr )

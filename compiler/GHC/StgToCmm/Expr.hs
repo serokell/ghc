@@ -54,9 +54,9 @@ import GHC.Data.FastString
 import GHC.Utils.Outputable
 import GHC.Utils.Panic
 
-import Control.Monad ( when, unless, void, forM )
+import Control.Monad ( unless, void, guard )
 import Control.Arrow ( first )
-import Data.List     ( partition )
+import Data.List     ( partition, findIndex )
 import GHC.Stg.EnforceEpt.TagSig (isTaggedSig)
 import GHC.Platform.Profile (profileIsProfiling)
 
@@ -68,9 +68,9 @@ import GHC.Types.SrcLoc (noSrcSpan)
 import GHC.Builtin.Types (manyDataConTy)
 import GHC.Types.Name.Occurrence
 import GHC.Types.Name   ( mkInternalName )
-import Control.Monad.Trans.Writer.CPS
-import Data.Monoid (First (..))
 import GHC.Types.Basic
+
+import Debug.Trace
 
 ------------------------------------------------------------------------
 --              cgExpr: the main function
@@ -672,41 +672,137 @@ cgSelectField :: FieldLabelString  -- selected field
               -> FCode ReturnKind
 cgSelectField f scrut s tycon tyargs = do
   let cons = tyConDataCons tycon
-  let alts = mapMaybe (select_field_mk_alt f tyargs) cons
-  cgCase scrut (dead_bndr s) (AlgAlt tycon) alts
+  let bndr = dead_bndr s
+  platform <- getPlatform
+  let ret_bndrs = assertNonVoidIds [bndr]
+      alt_regs  = map (idToReg platform) ret_bndrs
 
-select_field_mk_alt :: FieldLabelString -> [Type] -> DataCon -> Maybe CgStgAlt
-select_field_mk_alt f tyargs con | not (null flds) = do
-  let (fld_binders, m_fld) = select_field_mk_fld_ids f flds fld_tys
-  fld <- getFirst m_fld
-  Just $ GenStgAlt @CodeGen (DataAlt con) fld_binders (StgApp fld [])
-  where
-    flds = dataConFieldLabels con
-    fld_tys = dataConInstArgTys con tyargs
-select_field_mk_alt _ _ _ = Nothing
+  simple_scrut <- isSimpleScrut scrut (AlgAlt tycon)
+  let do_gc = True
+      gc_plan = GcInAlts alt_regs
+        -- cf Note [Compiling case expressions]
 
-select_field_mk_fld_ids :: FieldLabelString -> [FieldLabel] -> [Scaled Type] -> ([Id], First Id)
-select_field_mk_fld_ids f flds fld_tys = runWriter $
-  forM (zip3 [2 ..] flds fld_tys) $ \(ix, fld, Scaled mult ty) -> do
-    let used = flLabel fld == f
-        fld_id = select_field_mk_id used ix (occName fld) mult ty
-    when used $ tell (First (Just fld_id))
-    pure fld_id
+  mb_cc <- maybeSaveCostCentre simple_scrut
 
-select_field_mk_id :: Bool -> Int -> OccName -> Mult -> Type -> Id
-select_field_mk_id used uniq occ mult ty =
+  let sequel = AssignTo alt_regs do_gc{- Note [scrut sequel] -}
+  ret_kind <- withSequel sequel (cgExpr scrut)
+  restoreCurrentCostCentre platform mb_cc
+  _ <- bindArgsToRegs ret_bndrs
+
+  (mb_deflt, branches) <- do
+    tagged_cmms <-
+     let
+       base_reg = idToReg platform (NonVoid bndr)
+
+       cg_alt :: DataCon -> Maybe (FCode (AltCon, CmmAGraphScoped))
+       cg_alt con
+         = do
+            let flds = dataConFieldLabels con
+            guard (not (null flds))
+            field_idx <- findIndex (\fld -> flLabel fld == f) flds
+
+            let fld_tys = dataConInstArgTys con tyargs
+                mk_binder i fld (Scaled mult ty) = select_field_mk_id (i + 2) (occName fld) mult ty
+                result_fld = mk_binder field_idx (flds !! field_idx) (fld_tys !! field_idx)
+
+            Just $
+              getCodeScoped             $
+              maybeAltHeapCheck (gc_plan, ret_kind) $
+              do { -- Optimization: we know all binders except result_fld are dead,
+                   -- so we skip bindConArgs and directly load just the one field.
+                   -- This avoids generating dead loads that would otherwise need
+                   -- to be eliminated by CmmSink.
+                   -- See Note [Dead-binder optimisation] in GHC.StgToCmm.Expr
+                 ; profile <- getProfile
+                 ; let arg = NonVoid result_fld
+                       tag = tagForCon platform con
+                       -- Compute the offset for our field by calculating offsets
+                       -- for all fields up to and including field_idx
+                       all_args = assertNonVoidIds $ zipWith3 mk_binder [0..field_idx] flds fld_tys
+                       (_, _, all_offsets) = mkVirtConstrOffsets profile (addIdReps all_args)
+                       offset = case all_offsets of
+                                  [] -> panic "cgSelectField: no offsets"
+                                  _ -> snd (last all_offsets)
+                 ; emit $ mkTaggedObjectLoad platform (idToReg platform arg)
+                                              base_reg offset tag
+                 ; _ <- bindArgToReg arg
+                 ; _ <- cgExpr (StgApp result_fld [])
+                 ; return (DataAlt con) }
+
+     in
+      forkAlts (mapMaybe cg_alt cons)
+
+
+    let mb_deflt = case tagged_cmms of
+                    ((DEFAULT,rhs) : _) -> Just rhs
+                    _other              -> Nothing
+                      -- DEFAULT is always first, if present
+        branches = [ (dataConTagZ con, cmm)
+                   | (DataAlt con, cmm) <- tagged_cmms ]
+    return (mb_deflt, branches)
+
+  let !fam_sz   = tyConFamilySize tycon
+      !bndr_reg = CmmLocal (idToReg platform (NonVoid bndr))
+      !ptag_expr = cmmConstrTag1 platform (CmmReg bndr_reg)
+      !branches' = first succ <$> branches
+      !maxpt = mAX_PTR_TAG platform
+      (!via_ptr, !via_info) = partition ((< maxpt) . fst) branches'
+      !small = isSmallFamily platform fam_sz
+
+        -- Is the constructor tag in the node reg?
+        -- See Note [Tagging big families]
+  if small || null via_info
+  then -- Yes, bndr_reg has constructor tag in ls bits
+      emitSwitch ptag_expr branches' mb_deflt 1
+        (if small then fam_sz else maxpt)
+
+  else -- No, the get exact tag from info table when mAX_PTR_TAG
+        -- See Note [Double switching for big families]
+      do
+        profile     <- getProfile
+        align_check <- stgToCmmAlignCheck <$> getStgToCmmConfig
+        let !untagged_ptr = cmmUntag platform (CmmReg bndr_reg)
+            !itag_expr = getConstrTag profile align_check untagged_ptr
+            !info0 = first pred <$> via_info
+        if null via_ptr then
+          emitSwitch itag_expr info0 mb_deflt 0 (fam_sz - 1)
+        else do
+          infos_lbl <- newBlockId
+          infos_scp <- getTickScope
+
+          let spillover = (maxpt, (mkBranch infos_lbl, infos_scp))
+
+          (mb_shared_deflt, mb_shared_branch) <- case mb_deflt of
+              (Just (stmts, scp)) ->
+                  do lbl <- newBlockId
+                     return ( Just (mkLabel lbl scp <*> stmts, scp)
+                            , Just (mkBranch lbl, scp))
+              _ -> return (Nothing, Nothing)
+          -- Switch on pointer tag
+          emitSwitch ptag_expr (spillover : via_ptr) mb_shared_deflt 1 maxpt
+          join_lbl <- newBlockId
+          emit (mkBranch join_lbl)
+          -- Switch on info table tag
+          emitLabel infos_lbl
+          emitSwitch itag_expr info0 mb_shared_branch
+            (maxpt - 1) (fam_sz - 1)
+          emitLabel join_lbl
+
+  return AssignedDirectly
+
+select_field_mk_id :: Int -> OccName -> Mult -> Type -> Id
+select_field_mk_id uniq occ mult ty =
   mkLocalVar VanillaId
              (mkInternalName (mkBuiltinUnique uniq)
                              occ
                              noSrcSpan)
              mult
              ty
-             (if used then vanillaIdInfo `setOccInfo`
-                             OneOcc NotInsideLam
-                                    oneBranch
-                                    NotInteresting
-                                    NoTailCallInfo
-                      else vanillaIdInfo `setOccInfo` IAmDead)
+             (vanillaIdInfo `setOccInfo`
+                OneOcc NotInsideLam
+                       oneBranch
+                       NotInteresting
+                       NoTailCallInfo)
 
 dead_bndr :: Type -> Id
 dead_bndr t =
