@@ -37,6 +37,7 @@ import GHC.Types.Id.Info
 import GHC.Types.CostCentre
 import GHC.Types.Tickish
 import GHC.Types.Var.Env
+import GHC.Types.Var.Set
 import GHC.Types.Name   ( isExternalName, mkInternalName )
 import GHC.Types.Basic  ( Arity, TypeOrConstraint(..) )
 import GHC.Types.Literal
@@ -64,7 +65,6 @@ import Data.Monoid (Any(..), First (..))
 import GHC.Core.Make (rEC_SEL_ERROR_ID)
 import qualified Data.ByteString.Char8 as BS
 import GHC.Stack (HasCallStack)
-import Debug.Trace
 import GHC.Core.Subst
 
 -- Note [Live vs free]
@@ -500,17 +500,60 @@ coreToStgExpr (Case scrut bndr _ alts)
 coreToStgExpr (Let bind body) = coreToStgLet bind body
 coreToStgExpr e               = pprPanic "coreToStgExpr" (ppr e)
 
-fieldOpToStg :: HasCallStack => FieldOperation -> CoreExpr -> [CoreArg] -> Type -> CtsM StgExpr
-fieldOpToStg (MkFieldOperation sort s _ f) first_arg other_args res_ty
-  | SelectField <- sort = mk_сase first_arg res_ty (sel_rhs other_args)
-  | SetField <- sort
-  , [scrut] <- other_args = mk_сase scrut res_ty (setter_rhs first_arg)
-  | otherwise = panic ""
+-- | Convert StgExpr to CgStgExpr by asserting all free variables are empty.
+-- This is a pure conversion that panics if the expression has any free variables,
+-- which should be the case for expressions created during Core-to-STG conversion
+-- before the FVs pass.
+stgToCgStgExpr :: StgExpr -> CgStgExpr
+stgToCgStgExpr = go
   where
-    sel_rhs args fld _ _ = coreToStgApp fld args [] res_ty
+    go :: StgExpr -> CgStgExpr
+    go (StgApp f args) = StgApp f args
+    go (StgLit lit) = StgLit lit
+    go (StgConApp dc n args tys) = StgConApp dc n args tys
+    go (StgOpApp op args ty) = StgOpApp op args ty
+    go (StgCase scrut bndr alt_type alts) =
+      StgCase (go scrut) bndr alt_type (map goAlt alts)
+    go (StgLet ext bind body) =
+      StgLet ext (goBind bind) (go body)
+    go (StgLetNoEscape ext bind body) =
+      StgLetNoEscape ext (goBind bind) (go body)
+    go (StgTick tick e) = StgTick tick (go e)
+
+    goBind :: StgBinding -> CgStgBinding
+    goBind (StgNonRec b rhs) = StgNonRec b (goRhs rhs)
+    goBind (StgRec pairs) = StgRec [(b, goRhs rhs) | (b, rhs) <- pairs]
+
+    goRhs :: StgRhs -> CgStgRhs
+    goRhs (StgRhsClosure _ ccs uf args body typ) =
+      -- For 'CodeGen pass, XRhsClosure expects DIdSet (free variables)
+      -- We use emptyDVarSet since this is a fresh conversion from Core
+      -- where free variables haven't been computed yet
+      StgRhsClosure emptyDVarSet ccs uf args (go body) typ
+    goRhs (StgRhsCon ccs dc mu ts args typ) =
+      StgRhsCon ccs dc mu ts args typ
+
+    goAlt :: StgAlt -> CgStgAlt
+    goAlt (GenStgAlt con bndrs rhs) = GenStgAlt con bndrs (go rhs)
+
+fieldOpToStg :: HasCallStack => FieldOperation -> CoreExpr -> [CoreArg] -> Type -> CtsM StgExpr
+fieldOpToStg (MkFieldOperation sort s _ f) first_arg [] res_ty
+ | SelectField <- sort = do
+     scrut <- coreToStgExpr first_arg
+     let (tycon, tyargs) = case s of
+           TyConApp t args -> (t, args)
+           _ -> panic "not a tycon"
+     return $ StgOpApp (StgSelectField f (stgToCgStgExpr scrut) s tycon tyargs) [] res_ty
+fieldOpToStg (MkFieldOperation sort s _ f) first_arg other_args res_ty
+ | SetField <- sort
+ , [scrut] <- other_args = mk_case scrut res_ty (setter_rhs first_arg)
+  where
     setter_rhs to_set fld (con :: DataCon) flds = coreToStgApp (dataConWrapId con) (map (\f -> if f == fld then to_set else Var f) flds) [] res_ty
 
-    mk_сase arg res_ty mk_rhs = do
+    mk_case :: CoreExpr -> Type
+                        -> (Id -> DataCon -> [Id] -> CtsM (GenStgExpr 'Vanilla))
+                        -> CtsM (GenStgExpr 'Vanilla)
+    mk_case arg res_ty mk_rhs = do
       scrut <- coreToStgExpr arg
       let (tycon, tyargs) = case s of
             TyConApp t args -> (t, args)
@@ -557,6 +600,7 @@ fieldOpToStg (MkFieldOperation sort s _ f) first_arg other_args res_ty
 
     mk_id uniq occ mult ty =
       mkLocalId (mkInternalName (mkBuiltinUnique uniq) occ noSrcSpan) mult ty
+fieldOpToStg _ _ _ _ = panic "fieldOpToStg"
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
 mkStgAltType bndr alts

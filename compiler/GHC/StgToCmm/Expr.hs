@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DataKinds #-}
 
 -----------------------------------------------------------------------------
 --
@@ -9,7 +10,7 @@
 --
 -----------------------------------------------------------------------------
 
-module GHC.StgToCmm.Expr ( cgExpr, cgLit ) where
+module GHC.StgToCmm.Expr ( cgExpr, cgSelectField, cgLit ) where
 
 import GHC.Prelude hiding ((<*>))
 
@@ -42,7 +43,8 @@ import GHC.Types.ForeignCall
 import GHC.Types.Id
 import GHC.Builtin.PrimOps
 import GHC.Core.TyCon
-import GHC.Core.Type        ( isUnliftedType )
+import GHC.Core.Type        ( isUnliftedType, Scaled, Mult )
+import GHC.Core.TyCo.Rep    ( Type )
 import GHC.Types.RepType    ( isZeroBitTy, countConRepArgs, mightBeFunTy )
 import GHC.Types.CostCentre ( CostCentreStack, currentCCS )
 import GHC.Types.Tickish
@@ -52,11 +54,23 @@ import GHC.Data.FastString
 import GHC.Utils.Outputable
 import GHC.Utils.Panic
 
-import Control.Monad ( unless, void )
+import Control.Monad ( when, unless, void, forM )
 import Control.Arrow ( first )
 import Data.List     ( partition )
 import GHC.Stg.EnforceEpt.TagSig (isTaggedSig)
 import GHC.Platform.Profile (profileIsProfiling)
+
+import GHC.Core.TyCo.Rep (Scaled (..))
+import GHC.Types.Id.Info
+import GHC.Types.Var (mkLocalVar)
+import GHC.Builtin.Uniques
+import GHC.Types.SrcLoc (noSrcSpan)
+import GHC.Builtin.Types (manyDataConTy)
+import GHC.Types.Name.Occurrence
+import GHC.Types.Name   ( mkInternalName )
+import Control.Monad.Trans.Writer.CPS
+import Data.Monoid (First (..))
+import GHC.Types.Basic
 
 ------------------------------------------------------------------------
 --              cgExpr: the main function
@@ -649,6 +663,60 @@ If shouldInlinePrimOp returns True when called from GHC.StgToCmm.Expr for the
 purpose of heap check placement, we *must* inline the primop later in
 GHC.StgToCmm.Prim. If we don't things will go wrong.
 -}
+
+cgSelectField :: FieldLabelString  -- selected field
+              -> CgStgExpr    -- scrutinee
+              -> Type         -- ?
+              -> TyCon        -- tycon of the data type
+              -> [Type]       -- instantiated at these type args
+              -> FCode ReturnKind
+cgSelectField f scrut s tycon tyargs = do
+  let cons = tyConDataCons tycon
+  let alts = mapMaybe (select_field_mk_alt f tyargs) cons
+  cgCase scrut (dead_bndr s) (AlgAlt tycon) alts
+
+select_field_mk_alt :: FieldLabelString -> [Type] -> DataCon -> Maybe CgStgAlt
+select_field_mk_alt f tyargs con | not (null flds) = do
+  let (fld_binders, m_fld) = select_field_mk_fld_ids f flds fld_tys
+  fld <- getFirst m_fld
+  Just $ GenStgAlt @CodeGen (DataAlt con) fld_binders (StgApp fld [])
+  where
+    flds = dataConFieldLabels con
+    fld_tys = dataConInstArgTys con tyargs
+select_field_mk_alt _ _ _ = Nothing
+
+select_field_mk_fld_ids :: FieldLabelString -> [FieldLabel] -> [Scaled Type] -> ([Id], First Id)
+select_field_mk_fld_ids f flds fld_tys = runWriter $
+  forM (zip3 [2 ..] flds fld_tys) $ \(ix, fld, Scaled mult ty) -> do
+    let used = flLabel fld == f
+        fld_id = select_field_mk_id used ix (occName fld) mult ty
+    when used $ tell (First (Just fld_id))
+    pure fld_id
+
+select_field_mk_id :: Bool -> Int -> OccName -> Mult -> Type -> Id
+select_field_mk_id used uniq occ mult ty =
+  mkLocalVar VanillaId
+             (mkInternalName (mkBuiltinUnique uniq)
+                             occ
+                             noSrcSpan)
+             mult
+             ty
+             (if used then vanillaIdInfo `setOccInfo`
+                             OneOcc NotInsideLam
+                                    oneBranch
+                                    NotInteresting
+                                    NoTailCallInfo
+                      else vanillaIdInfo `setOccInfo` IAmDead)
+
+dead_bndr :: Type -> Id
+dead_bndr t =
+  mkLocalVar VanillaId
+             (mkInternalName (mkBuiltinUnique 1)
+                             (mkOccName varName "_")
+                             noSrcSpan)
+             manyDataConTy
+             t
+             (vanillaIdInfo `setOccInfo` IAmDead)
 
 -----------------
 maybeSaveCostCentre :: Bool -> FCode (Maybe LocalReg)

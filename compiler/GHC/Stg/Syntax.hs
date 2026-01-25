@@ -724,6 +724,13 @@ data StgOp
         -- apply to unlifted boxed arguments in GHC.StgToCmm.Foreign. See Note
         -- [Unlifted boxed arguments to foreign calls]
 
+  | StgSelectField
+        FieldLabelString  -- selected field
+        CgStgExpr    -- scrutinee
+        Type         -- ?
+        TyCon        -- tycon of the data type
+        [Type]       -- instantiated at these type args
+
 {-
 ************************************************************************
 *                                                                      *
@@ -914,6 +921,7 @@ pprStgOp :: StgOp -> SDoc
 pprStgOp (StgPrimOp  op)   = ppr op
 pprStgOp (StgPrimCallOp op)= ppr op
 pprStgOp (StgFCallOp op _) = ppr op
+pprStgOp (StgSelectField{}) = text "select_field"
 
 instance Outputable StgOp where
   ppr = pprStgOp

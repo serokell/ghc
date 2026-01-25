@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE DataKinds #-}
 
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
@@ -21,6 +22,7 @@ import GHC.Prelude hiding ((<*>))
 import GHC.Platform
 import GHC.Platform.Profile
 
+import {-# SOURCE #-} GHC.StgToCmm.Expr ( cgSelectField )
 import GHC.StgToCmm.Config
 import GHC.StgToCmm.Layout
 import GHC.StgToCmm.Foreign
@@ -36,7 +38,7 @@ import GHC.Cmm.Graph
 import GHC.Stg.Syntax
 import GHC.Cmm
 import GHC.Unit         ( rtsUnit )
-import GHC.Core.Type    ( Type, tyConAppTyCon_maybe )
+import GHC.Core.Type    ( Type, tyConAppTyCon_maybe, Mult )
 import GHC.Core.TyCon
 import GHC.Cmm.CLabel
 import GHC.Cmm.Info     ( closureInfoPtr )
@@ -86,6 +88,9 @@ cgOpApp (StgPrimCallOp primcall) args _res_ty
   = do  { cmm_args <- getNonVoidArgAmodes args
         ; let fun = CmmLit (CmmLabel (mkPrimCallLabel primcall))
         ; emitCall (NativeNodeCall, NativeReturn) fun cmm_args }
+
+cgOpApp (StgSelectField f scrut s tycon tyargs) _args _res_ty =
+  cgSelectField f scrut s tycon tyargs
 
 cmmPrimOpApp :: StgToCmmConfig -> PrimOp -> [CmmExpr] -> Maybe Type -> FCode ReturnKind
 cmmPrimOpApp cfg primop cmm_args mres_ty =
