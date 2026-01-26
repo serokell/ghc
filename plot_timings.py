@@ -36,6 +36,22 @@ def extract_size_from_filename(filename):
         return int(match.group(1))
     return None
 
+def get_cmm_file_sizes():
+    """Get sizes of all .dump-cmm files."""
+    cmm_files = glob.glob('*.dump-cmm')
+    sizes = []
+
+    for filepath in cmm_files:
+        filename = Path(filepath).name
+        # Extract test size from filename like 'T10.dump-cmm' -> 10
+        match = re.match(r'T(\d+)\.dump-cmm', filename)
+        if match:
+            test_size = int(match.group(1))
+            file_size = Path(filepath).stat().st_size
+            sizes.append((test_size, file_size))
+
+    return sorted(sizes, key=lambda x: x[0])
+
 def main():
     # Find all .dump-timings files
     timing_files = sorted(glob.glob('*.dump-timings'))
@@ -69,8 +85,12 @@ def main():
     for phase in phase_data:
         phase_data[phase].sort(key=lambda x: x[0])
 
+    # Get CMM file sizes
+    cmm_sizes = get_cmm_file_sizes()
+    print(f"Found {len(cmm_sizes)} .dump-cmm files")
+
     # Create plots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
 
     # Plot 1: Time vs Size
     ax1.set_xlabel('Test Size')
@@ -83,6 +103,12 @@ def main():
     ax2.set_ylabel('Allocation (bytes)')
     ax2.set_title('Compilation Phase Allocations vs Test Size')
     ax2.grid(True, alpha=0.3)
+
+    # Plot 3: CMM File Size vs Test Size
+    ax3.set_xlabel('Test Size')
+    ax3.set_ylabel('CMM File Size (bytes)')
+    ax3.set_title('Generated .dump-cmm File Size vs Test Size')
+    ax3.grid(True, alpha=0.3)
 
     # Select interesting phases to plot (skip very fast ones)
     interesting_phases = []
@@ -104,6 +130,12 @@ def main():
 
     ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
     ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+
+    # Plot CMM file sizes
+    if cmm_sizes:
+        test_sizes = [s[0] for s in cmm_sizes]
+        file_sizes = [s[1] for s in cmm_sizes]
+        ax3.plot(test_sizes, file_sizes, marker='o', linewidth=2, color='darkred')
 
     plt.tight_layout()
 

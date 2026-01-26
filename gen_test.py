@@ -11,7 +11,7 @@ def generate_test_file(n):
 
     header = f"""{{-# LANGUAGE DataKinds #-}}
 {{-# OPTIONS -fno-opt-selectors #-}}
-{{-# OPTIONS -ddump-to-file -ddump-timings #-}}
+{{-# OPTIONS -ddump-to-file -ddump-timings -ddump-cmm #-}}
 -- {{-# OPTIONS -ddump-to-file -ddump-stg-from-core -ddump-stg-final -ddump-cmm #-}}
 
 module T{n} where
