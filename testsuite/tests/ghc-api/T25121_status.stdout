@@ -1,0 +1,25 @@
+GhcPs
+-----
+XVar (mismatch)
+  / NoExtField
+  / EpToken "'"
+XLitE (match) = NoExtField
+XPar (match) = ((EpToken "("),(EpToken ")"))
+XApp (match) = NoExtField
+XAppTypeE (match) = EpToken "@"
+XOpApp (match) = NoExtField
+XForAll (match) = NoExtField
+XQual (match) = NoExtField
+XStar (match) = EpUniToken "*" "\9733"
+XFunArr (match) = NoExtField
+XExprWithTySig (match) = EpUniToken "::" "\8759"
+XUntypedSplice (match) = NoExtField
+XExplicitList (mismatch)
+  / AnnList ()
+  / ((EpToken "'"),(EpToken "["),(EpToken "]"))
+XExplicitTuple (mismatch)
+  / ((EpaLocation' [GenLocated (EpaLocation' NoComments) EpaComment]),(EpaLocation' [GenLocated (EpaLocation' NoComments) EpaComment]))
+  / ((EpToken "'"),(EpToken "("),(EpToken ")"))
+XHole (mismatch)
+  / HoleKind
+  / EpToken "_"
